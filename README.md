@@ -51,32 +51,23 @@ cross-compile. Any DRP-AI TVM model directory (`deploy.so` / `deploy.json` /
 
 **Which model runs.** The detector takes whatever is installed, in this order:
 
-| Order | Model | Runs on | Detector speed (measured) | Notes |
-|---|---|---|---|---|
-| 1 | `model/ball_drpai/` — custom YOLOv8n compiled with DRP-AI TVM | **DRP-AI** | not measured yet | Best option. Not in the repo — you compile it, see [CUSTOM_DRPAI_DETECTOR.md](CUSTOM_DRPAI_DETECTOR.md) |
-| 2 | `model/ball_best.tflite` — custom YOLOv8n, INT8 | CPU (4× Cortex-A55) | ~105 ms/frame | Bundled. What runs out of the box |
-| 3 | Stock COCO YOLOv3 from the AI SDK's R01 app | **DRP-AI** | ~48 ms/frame (38 ms inference) | Already on the SD card. Uses COCO's `sports ball` class |
+| Order | Model | Runs on | Per detection (measured) | Ball found, 60 validation images | Notes |
+|---|---|---|---|---|---|
+| 1 | `model/ball_drpai/` — custom YOLOv8n compiled with DRP-AI TVM | **DRP-AI** | **~30 ms** (15 ms on the accelerator) | **58** | Bundled. What runs out of the box. How it was built: [CUSTOM_DRPAI_DETECTOR.md](CUSTOM_DRPAI_DETECTOR.md) |
+| 2 | `model/ball_best.tflite` — custom YOLOv8n, INT8 | CPU (4× Cortex-A55) | ~100 ms | 47 | Bundled. The fallback, and the other half of the live comparison |
+| 3 | Stock COCO YOLOv3 from the AI SDK's R01 app | **DRP-AI** | ~48 ms | 13 | Already on the SD card. Uses COCO's `sports ball` class; fine as a runtime check, poor at this ball |
 
-Why a CPU model outranks a DRP-AI one: accuracy on the actual ball. On 60
-wrist-camera validation images that contain the ball, the custom model found it
-in 47; the stock COCO model found a "sports ball" in 13. A fast detector that
-misses the ball can't pick it up. Compiling the custom model for DRP-AI
-(option 1) gets you both, and the demo switches to it automatically once
-`model/ball_drpai/` exists.
+`set_backend cpu` and `set_backend drpai` from /IOTCONNECT switch between the
+first two while the demo runs; the HDMI screen shows which one is active and
+its inference time.
 
-**Loop rate.** With the arm attached the control loop runs at about **6 fps on
-the bundled CPU model** and **9 fps (up to 13) on the stock DRP-AI model**
-(measured). Three things got it there from the 3.5 fps of the first port:
-
-- all six servo positions are read in one batched request instead of six
-  (the arm's controller answers one request per ~20 ms tick, so six single
-  reads cost ~115 ms; a batched one usually ~15-30 ms, with an occasional
-  200 ms stall that accounts for the spread in the DRP-AI figure);
-- that read runs on a helper thread while YOLO runs;
-- the HDMI screen is drawn on its own thread.
-
-Against a simulated arm (`yolo_dryrun.py`) the loop reaches ~8 fps on the CPU
-model and ~18 fps on the stock DRP-AI model.
+**Loop rate.** With the arm attached the control loop runs at about **10 fps
+(up to 12) on the DRP-AI ball model** and about **6 fps on the CPU model**
+(measured). Detection is no longer the limit on DRP-AI: reading the six servo
+positions is. The arm's controller answers one request per ~20 ms tick, so the
+positions are read in one batched request (usually 15–30 ms, with an occasional
+200 ms stall) on a helper thread while YOLO runs, and the HDMI screen is drawn
+by a separate process. The first port, before any of that, ran at 3.5 fps.
 
 To force a specific model: `YOLO_MODEL=/home/weston/R01_object_detection/exe_v2h/yolov3_onnx ./start.sh`.
 
@@ -465,8 +456,8 @@ attention on a new build:
 
 > [!NOTE]
 > Several of these are counted in **frames**, and the defaults were tuned on
-> the Tria at ~14 fps. This board runs the loop at ~6 fps on the bundled CPU
-> model and ~9-13 fps on DRP-AI, so frame-counted behaviour (grace periods,
+> the Tria at ~14 fps. This board runs the loop at ~10 fps on the DRP-AI
+> model and ~6 fps on the CPU model, so frame-counted behaviour (grace periods,
 > settle time) stretches on the CPU model. Re-tune if tracking feels sluggish.
 
 ---
@@ -544,8 +535,9 @@ The device must have been **created** with the `robarmV2H` template and
 ### Custom model on DRP-AI
 
 [CUSTOM_DRPAI_DETECTOR.md](CUSTOM_DRPAI_DETECTOR.md) covers training a model on
-your own ball and compiling it for DRP-AI with Renesas' DRP-AI TVM. The result
-goes in `model/ball_drpai/` and is picked up automatically.
+your own ball and compiling it for DRP-AI with Renesas' DRP-AI TVM — the
+procedure the bundled `model/ball_drpai/` was built with. A new model goes in
+the same place and is picked up automatically.
 
 ### Depth-gated grab
 
@@ -567,7 +559,7 @@ this board; the radius gate does not need one.
 | Board stops responding after a while (ping works, SSH and the app don't) | Out of memory. This image's OpenCV leaks a frame on every read of a YUYV camera stream through the V4L2 backend; `camera_settings.open_capture()` requests MJPG to avoid it. Any code that opens the camera another way will leak. Recover without a power cycle from the serial console: send a break followed by `f` (needs `kernel.sysrq=1`) |
 | Camera opens but exposure / saturation commands do nothing | Something opened the camera with OpenCV's default GStreamer backend. Use `camera_settings.open_capture()`, which selects V4L2 |
 | ~15 fps camera instead of 30 | Same cause — the V4L2 backend needs the frame rate requested, which `open_capture()` does. A long manual exposure also caps the rate (exposure 400 = 40 ms = 25 fps at most) |
-| Demo runs on `backend=CPU` | No DRP-AI ball model installed; that is the default. See [§1](#1-how-it-works-on-the-rzv2h) |
+| Demo runs on `backend=CPU` | `model/ball_drpai/` is missing on the board, or the backend was set to `cpu` (`yolo_config_show`, then `set_backend auto`). See [§1](#1-how-it-works-on-the-rzv2h) |
 | TVM error when a mode starts | Another process is using DRP-AI (a Renesas HDMI demo, a second copy of this app), or the model was compiled with a different DRP-AI TVM version than the board's `libtvm_runtime.so` |
 | Ball visible but never detected | Almost always the camera, not the threshold: too dark, or washed out by auto white balance, the ball scores below 0.3. Fix white balance (`camera_setting auto_wb 0`, `camera_setting wb_temperature 2800`) and raise `exposure` / `gain` until the ball looks bright yellow in the view — see the camera notes in [§5](#5-per-site-calibration). It also scores lower when it fills much of the frame — teach the scan poses higher above the table. If it still fails with a well-lit ball, retrain ([CUSTOM_DRPAI_DETECTOR.md](CUSTOM_DRPAI_DETECTOR.md)) |
 | Arm tracks but never grabs | The gate isn't satisfied: read the gate line in the overlay, then re-teach with `./teach_grab.sh` or send `set_grab_radius <px>` |
@@ -585,7 +577,7 @@ this board; the radius gate does not need one.
 | | Tria Vision AI Kit 6490 | Renesas RZ/V2H EVK |
 |---|---|---|
 | Accelerator | Hexagon NPU, TFLite + QNN delegate | DRP-AI, DRP-AI TVM runtime via `detectors/tvm_rt.py` |
-| Custom model format | INT8 TFLite | DRP-AI TVM model directory (compiled from ONNX); INT8 TFLite on the CPU as fallback |
+| Custom model format | INT8 TFLite | DRP-AI TVM model directory (compiled from ONNX, decode done in NumPy); INT8 TFLite on the CPU as fallback |
 | Stock model | YOLO-X (COCO) | YOLOv3 (COCO), from the AI SDK R01 app |
 | Depth | MiDaS on the NPU, bundled | Optional; none bundled. Grab gate uses ball radius |
 | Arm USB | hidraw | libusb (kernel has no hidraw) |

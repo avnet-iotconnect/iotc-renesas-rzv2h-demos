@@ -5,3 +5,5 @@
 *.png    binary
 *.jpg    binary
 *.tflite binary
+*.so     binary
+*.params binary

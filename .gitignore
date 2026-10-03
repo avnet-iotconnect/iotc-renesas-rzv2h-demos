@@ -66,3 +66,5 @@ drpai/downloads/*
 !drpai/downloads/README.md
 drpai/build/
 model/*_drpai/
+# ...except the bundled DRP-AI ball detector
+!model/ball_drpai/

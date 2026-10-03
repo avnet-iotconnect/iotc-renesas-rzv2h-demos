@@ -11,23 +11,35 @@ The repo already ships a ball model trained on the reference ball
   matching `ball_best.onnx` comes out of the training notebook), or
 - your ball looks different and the bundled model doesn't find it (all steps).
 
-> [!IMPORTANT]
-> **Status of this guide.** Steps 1–6 (capture, label, train) and the CPU
-> TFLite path are carried over from the Tria demo and are in daily use. The
-> DRP-AI runtime path (step 9) is verified on the board with Renesas' stock
-> model. **Steps 7–8 — building the DRP-AI TVM image and compiling the custom
-> model — have not been run end to end yet**, because they need Renesas'
-> login-gated downloads. Expect to adjust details the first time through, and
-> please fold what you learn back into this file.
+> [!NOTE]
+> **Status of this guide.** The whole pipeline has been run end to end on the
+> reference rig. The DRP-AI ball model in this repo (`model/ball_drpai/`) was
+> built with steps 7–9: about 30 ms per detection on the board against about
+> 100 ms for the CPU model, and the ball found in 58 of 60 validation images
+> against 47. Steps 1–5 (capture and labelling) are carried over from the Tria
+> demo; the reference dataset was captured there, not on this rig.
 
 ---
 
 ## 1. What you're building
 
 ```
- wrist camera ──► letterbox 640x640, RGB, /255 ──► YOLOv8n on DRP-AI ──► decode + NMS ──► (cx, cy, r)
-                  (Python, CPU)                    (libtvm_runtime.so)    (Python, CPU)
+ wrist camera ──► letterbox 640x640, RGB, /255 ──► YOLOv8n on DRP-AI ──► DFL decode + NMS ──► (cx, cy, r)
+                  (Python, CPU, ~11 ms)            (~17 ms)              (NumPy, CPU, ~2 ms)
 ```
+
+Two things make that fast, and both are done for you by `drpai/compile.sh`:
+
+- **The decode tail is cut off the model.** An Ultralytics export ends with
+  reshape / softmax / anchor arithmetic that DRP-AI cannot run. Left in, DRP-AI
+  TVM compiles it for the CPU in half precision, and it costs more than the
+  network does on the accelerator (stock YOLOv8n: 67 ms with the tail, 15 ms
+  without). The cut model outputs six raw feature maps and
+  `detectors/yolo_detector.py` decodes them in NumPy.
+- **Export from the trained weights, not from a TFLite file.** A float ONNX
+  rebuilt from the INT8 TFLite model does compile, but its slice and resize
+  operators split the network into twelve DRP-AI fragments with CPU code
+  between them: 84 ms, and worse accuracy than the CPU model.
 
 The RZ/V AI SDK image runs models that were compiled ahead of time by
 **DRP-AI TVM** into a *model directory*:
@@ -46,9 +58,11 @@ and the demo uses it.
 
 Two things have to match or the model won't load:
 
-- **DRP-AI TVM version.** A model compiled with a newer DRP-AI TVM does not
-  load on an older runtime. Check the board with `ls /usr/lib/libtvm_runtime.so.*`
-  (the reference board has `2.5.1`) and compile with that same release.
+- **Model format.** DRP-AI TVM 2.8 (the release paired with AI SDK v8.00)
+  writes a MERA2 plan by default, which needs Renesas' newer C++ runtime.
+  `compile.sh` passes `--mera1`, which produces the classic
+  `deploy.so` / `deploy.json` / `deploy.params` set; the board's
+  `libtvm_runtime.so` (2.5.1 on the reference board) loads that.
 - **Input layout.** `yolo_detector.py` feeds `float32 [1, 3, 640, 640]`, RGB,
   scaled to `[0, 1]`. The compile step calibrates with exactly that
   preprocessing.
@@ -192,29 +206,26 @@ to the board and run `python3 yolo_selftest.py`.
 
 ### Step 7 — Build the DRP-AI TVM compiler image (one time)
 
-Renesas' compiler stack is two licensed downloads plus an open-source repo.
-Download these with your My Renesas login into [`drpai/downloads/`](drpai/downloads/):
-
-| Download | File | From |
-|---|---|---|
-| DRP-AI Translator i8 | `DRP-AI_Translator_i8-v*-Linux-x86_64-Install` | https://www.renesas.com/software-tool/drp-ai-translator-i8 |
-| RZ/V2H AI SDK | `RTK0EF0180F*SJ.zip` | https://www.renesas.com/software-tool/rzv2h-ai-software-development-kit |
-
-Use the AI SDK version your board's SD card was made from. Then:
+The only download is the **RZ/V2H AI SDK** zip (`RTK0EF0180F*SJ.zip`, free
+My Renesas login) from
+https://www.renesas.com/software-tool/rzv2h-ai-software-development-kit —
+use the AI SDK version your board's SD card was made from. Its `ai_sdk_setup/`
+folder holds Renesas' own Dockerfile, the cross toolchain and the DRP-AI
+Translator i8 installer. Put the zip in [`drpai/downloads/`](drpai/downloads/) and run:
 
 ```bash
 drpai/build_image.sh
 ```
 
-[`drpai/build_image.sh`](drpai/build_image.sh) pulls the cross-toolchain
-installer out of the SDK zip, fetches Renesas' `DockerfileV2H`, **pins the
-DRP-AI TVM checkout to the release matching the board runtime** (`v2.5.1` by
-default — Renesas' Dockerfile would otherwise build whatever is newest), and
-builds the image `drp-ai_tvm_v2h:v2.5.1`. It takes 30–60 minutes.
+This works with Docker on Linux and with Docker Desktop on Windows (Git Bash
+or WSL) — a separate Linux machine is not needed. Allow about an hour and
+~35 GB; the SDK install step alone takes most of that.
 
-If your board reports a different `libtvm_runtime.so` version, build for it:
-`TVM_TAG=v2.6.1 drpai/build_image.sh` (and pass the same `TVM_TAG` to
-`compile.sh`).
+> [!WARNING]
+> On Docker Desktop with the containerd image store the build can end with
+> `failed to extract layer … UtimesNanoAt … no such file or directory`. The
+> image exists anyway: the first `docker run` unpacks it (slowly — several
+> minutes with no output) and after that containers start normally.
 
 ### Step 8 — Compile the model for DRP-AI
 
@@ -222,18 +233,24 @@ If your board reports a different `libtvm_runtime.so` version, build for it:
 drpai/compile.sh model/ball_best.onnx dataset/images
 ```
 
-[`drpai/compile.sh`](drpai/compile.sh) picks ~100 evenly spaced images from the
-dataset for INT8 calibration and runs Renesas' `compile_onnx_model_quant.py`
-inside the container through [`drpai/compile_yolo_onnx.py`](drpai/compile_yolo_onnx.py).
-That wrapper changes one thing in Renesas' sample: the calibration images go
-through YOLO preprocessing (letterbox, RGB, `/255`) instead of the ImageNet
-classification preprocessing the sample hard-codes. Calibrating a detector on
-inputs it will never see ruins the quantization ranges.
+[`drpai/compile.sh`](drpai/compile.sh) picks ~100 evenly spaced images for INT8
+calibration and runs [`drpai/compile_yolo_onnx.py`](drpai/compile_yolo_onnx.py)
+inside the container, which:
 
-Output: `model/ball_drpai/{deploy.so, deploy.json, deploy.params}`. The script
-ends by checking `deploy.json` for `mera_drp` subgraphs — that is what tells
-you the model really landed on the accelerator rather than compiling to
-CPU-only code.
+1. cuts the decode tail off the ONNX ([`drpai/cut_yolov8_head.py`](drpai/cut_yolov8_head.py));
+2. runs Renesas' `compile_onnx_model_quant.py` with one change — the
+   calibration images go through YOLO preprocessing (letterbox, RGB, `/255`)
+   instead of the ImageNet classification preprocessing the sample
+   hard-codes. Calibrating a detector on inputs it will never see ruins the
+   quantization ranges.
+
+It takes 15–25 minutes. Output: `model/ball_drpai/{deploy.so, deploy.json,
+deploy.params}`. A good result is a `deploy.json` with **one** operator, a
+`mera_drp` subgraph — the whole network on the accelerator.
+
+Add a few frames from your own rig to the calibration set (backgrounds, the
+ball at grab distance): the reference build used 92 dataset images plus 18
+frames of the bare mat.
 
 ### Step 9 — Deploy and verify
 
@@ -252,16 +269,41 @@ python3 yolo_dryrun.py --frames 100             # full control loop, simulated a
 What to expect from the selftest banner:
 
 ```
-[yolo] model=ball_drpai format=yolov8 nc=1 in=640x640 backend=DRP-AI (TVM runtime)
+[yolo] model=ball_drpai format=yolov8-raw nc=1 in=640x640 backend=DRP-AI (TVM runtime)
 ```
 
-- `backend=CPU (TVM runtime, model has no DRP-AI subgraph)` — the compile fell
-  back to CPU code; see the gotchas below.
-- Compare the hit rate against the same images run with
-  `--model model/ball_best.tflite`. A large drop points at calibration (too
-  few or unrepresentative images).
+and about 30 ms per frame. Compare the hit rate against the same images run
+with `--model model/ball_best.tflite`; a large drop points at calibration (too
+few or unrepresentative images).
 
-Once it checks out, `./start.sh` uses it with no further changes.
+Once it checks out, `./start.sh` uses it with no further changes, and
+`set_backend cpu` / `set_backend drpai` from /IOTCONNECT switches between the
+two models live.
+
+### No GPU, no Colab
+
+The model can also be trained on a PC's CPU with Docker. Save this as
+`train.py` next to the `dataset/` folder:
+
+```python
+from ultralytics import YOLO
+model = YOLO("yolov8n.pt")
+model.train(data="/w/dataset/data.yaml", epochs=40, imgsz=640, batch=16,
+            patience=15, scale=0.9, project="/w/runs", name="ball", device="cpu")
+YOLO("/w/runs/ball/weights/best.pt").export(format="onnx", imgsz=640, opset=12, simplify=True)
+```
+
+and run it with the dataset folder mounted:
+
+```bash
+docker run --rm --shm-size=4g -v "$PWD:/w" -w /w ultralytics/ultralytics:latest-cpu python /w/train.py
+```
+
+(`data.yaml`'s `path:` must be `/w/dataset` for this.) Expect about 13 minutes
+per epoch on a laptop CPU for 1,000 images; the reference model was taken
+after 6 epochs (mAP50 0.985). `scale=0.9` makes the augmentation zoom in as
+well as out, so the model also sees the ball as large as it looks just before
+a grab.
 
 ---
 
@@ -283,25 +325,27 @@ Once it checks out, `./start.sh` uses it with no further changes.
 
 ## 5. Gotchas
 
-- **Version mismatch is silent until load time.** If `deploy.so` was built with
-  a different DRP-AI TVM release than the board runtime, loading fails with a
-  TVM error from `tvm_rt.py`. Rebuild the image with the matching `TVM_TAG`.
-- **Static shapes only.** Export with a fixed `imgsz` (the notebook does).
-  `compile_yolo_onnx.py` refuses a model with dynamic axes.
-- **Box coordinates differ by export.** Ultralytics' TFLite export emits boxes
-  normalized to `[0, 1]`; its ONNX export emits input pixels. The decoder
-  handles both — if you bring a model from another exporter, check this first
-  when boxes land in the wrong place.
-- **Unsupported operators run on the CPU.** DRP-AI TVM splits the graph: what
-  DRP-AI supports runs there, the rest is compiled for the Cortex-A55. A
-  YOLOv8 head has a few such operators and that is fine. If *nothing* lands on
-  DRP-AI, try a lower ONNX opset in the export (the notebook uses 12).
+- **Don't edit `drpai/compile.sh` while it is running.** Bash reads a script
+  as it goes; an edit mid-run makes the tail of the run fail after the compile
+  itself has succeeded. The model is still in `drpai/build/work/out/`.
+- **A file in the image can go bad.** On the reference PC the PyTorch library
+  inside the image stopped importing (`undefined symbol: mkl_spblas_…`) after
+  working for one compile; its checksum no longer matched the official wheel.
+  `pip3 install --force-reinstall --no-deps torch==2.3.1+cpu --index-url
+  https://download.pytorch.org/whl/cpu` in a derived image fixed it.
+- **The compile can "fail" at the very end.** Renesas' script finishes by
+  building DRP-AI pre-processing objects this demo doesn't use; if only that
+  step fails, `compile_yolo_onnx.py` reports success because the model is
+  already written.
+- **Static shapes only.** Export with a fixed `imgsz`. `compile_yolo_onnx.py`
+  refuses a model with dynamic axes.
 - **One accelerator, one user.** DRP-AI holds one process's models at a time.
   Stop the demo (or send `set_mode mode=idle`) before running a selftest on a
   DRP-AI model, and don't run Renesas' HDMI demos alongside.
-- **`deploy.so` can be large.** The stock YOLOv3 one is ~190 MB. `model/*_drpai/`
-  is git-ignored for that reason; if yours is small enough to version, remove
-  that line from `.gitignore`.
+- **The CPU and DRP-AI models are different trainings.** `model/ball_best.tflite`
+  is the original Tria model; `model/ball_drpai/` was retrained on the same
+  dataset. To keep them in step, export an INT8 TFLite from the same weights
+  (the Colab notebook does) and replace the `.tflite`.
 - **Depth is separate.** The same compile flow should work for a MiDaS-small
   ONNX into `model/midas_drpai/` (the depth detector loads it automatically),
   but nobody has done it on this board yet. Calibration preprocessing for
