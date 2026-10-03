@@ -10,9 +10,13 @@
 #     scp -r model/ball_drpai root@<board-ip>:/root/iotc-renesas-rzv2h-robotic-arm/model/
 # Needs the image from drpai/build_image.sh.
 #
-# COMPILE_ARGS passes extra options to Renesas' compile script, e.g.
-#     COMPILE_ARGS="--mera1" drpai/compile.sh        # classic TVM output
+# COMPILE_ARGS are extra options for the compile. The default, --mera1, makes
+# DRP-AI TVM 2.8 write the classic deploy.so / deploy.json / deploy.params
+# set, which the board's libtvm_runtime.so loads and detectors/tvm_rt.py
+# drives. Without it the output is a MERA2 plan that needs Renesas' newer
+# C++ runtime. Add --keep-head to compile the model with its decode tail.
 set -e
+COMPILE_ARGS="${COMPILE_ARGS---mera1}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname "$HERE")"
 IMAGE="${IMAGE:-drp-ai_tvm_v2h:latest}"
@@ -33,7 +37,7 @@ docker image inspect "$IMAGE" >/dev/null 2>&1 \
 WORK="$HERE/build/work"
 rm -rf "$WORK" && mkdir -p "$WORK/calib" "$WORK/out"
 cp "$MODEL" "$WORK/model.onnx"
-cp "$HERE/compile_yolo_onnx.py" "$WORK/"
+cp "$HERE/compile_yolo_onnx.py" "$HERE/cut_yolov8_head.py" "$WORK/"
 total="$(find "$CALIB" -maxdepth 1 -name "*.jpg" | wc -l)"
 [ "$total" -gt 0 ] || { echo "ERROR: no .jpg images in $CALIB" >&2; exit 1; }
 step=$(( total / CALIB_COUNT )); [ "$step" -lt 1 ] && step=1

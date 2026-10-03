@@ -26,10 +26,9 @@ from onnx import utils
 HEAD_CONV = re.compile(r"/model\.\d+/(cv[23])\.(\d)/cv[23]\.\d\.2/Conv$")
 
 
-def main():
-    if len(sys.argv) != 3:
-        sys.exit(__doc__)
-    src, dst = sys.argv[1:]
+def cut(src, dst):
+    """Write ``dst`` = ``src`` without its decode tail. Returns False (and
+    writes nothing) if ``src`` doesn't have the Ultralytics Detect head."""
     model = onnx.load(src)
     found = {}
     for node in model.graph.node:
@@ -38,16 +37,25 @@ def main():
             found[(int(m.group(2)), m.group(1))] = node.output[0]
     scales = sorted({k[0] for k in found})
     if len(found) != 2 * len(scales) or not scales:
-        sys.exit(f"could not find the Detect head's final convolutions in {src} "
-                 f"(found {sorted(found)}) — is this an Ultralytics YOLOv8 detect export?")
+        return False
     # Order: per scale (finest grid first), box branch then class branch.
     outputs = [found[(s, b)] for s in scales for b in ("cv2", "cv3")]
     inputs = [i.name for i in model.graph.input]
     utils.extract_model(src, dst, inputs, outputs)
-    cut = onnx.load(dst)
-    print(f"wrote {dst}: {len(cut.graph.node)} nodes (was {len(model.graph.node)}), outputs:")
-    for o in cut.graph.output:
+    result = onnx.load(dst)
+    print(f"wrote {dst}: {len(result.graph.node)} nodes (was {len(model.graph.node)}), outputs:")
+    for o in result.graph.output:
         print("  ", o.name, [d.dim_value for d in o.type.tensor_type.shape.dim])
+    return True
+
+
+def main():
+    if len(sys.argv) != 3:
+        sys.exit(__doc__)
+    src, dst = sys.argv[1:]
+    if not cut(src, dst):
+        sys.exit(f"could not find the Detect head's final convolutions in {src} "
+                 "— is this an Ultralytics YOLOv8 detect export?")
 
 
 if __name__ == "__main__":

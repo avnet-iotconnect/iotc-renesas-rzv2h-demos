@@ -126,6 +126,13 @@ def _sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
 
 
+def _as_f32(a):
+    if a.dtype == np.float16:
+        from .tvm_rt import f16_to_f32
+        return f16_to_f32(a)
+    return a.astype(np.float32, copy=False)
+
+
 class YoloDetector:
     """YOLO detector on DRP-AI (model directory) or the CPU (.tflite)."""
 
@@ -168,6 +175,7 @@ class YoloDetector:
         if len(shp) != 4 or shp[1] != 3:
             raise RuntimeError(f"unexpected DRP-AI model input shape {shp}")
         self.in_h, self.in_w = int(shp[2]), int(shp[3])
+        self._blob = np.empty(shp, dtype=np.float32)
 
         # One inference on a blank frame both warms the accelerator up and
         # tells us the output layout.
@@ -297,19 +305,24 @@ class YoloDetector:
         """Run detection on a BGR frame. Returns a list[Detection] (may be empty)."""
         h0, w0 = frame_bgr.shape[:2]
         padded, scale, (dw, dh) = _letterbox(frame_bgr, self.in_w)
-        rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB)
 
         if self._drp is not None:
-            # DRP-AI TVM models take float32 NCHW RGB in [0, 1].
-            blob = np.ascontiguousarray(
-                np.transpose(rgb, (2, 0, 1))[None], dtype=np.float32)
-            blob *= 1.0 / 255.0
+            # DRP-AI TVM models take float32 NCHW RGB in [0, 1]. One pass per
+            # channel does the BGR->RGB swap, the scaling and the HWC->CHW
+            # move into a reused buffer (this image's OpenCV has no cv2.dnn).
+            blob = self._blob
+            for c in range(3):
+                np.multiply(padded[..., 2 - c], np.float32(1.0 / 255.0), out=blob[0, c])
+            if self.format == "yolov8-raw":
+                # Outputs stay float16; the decode converts only what it uses.
+                outs = self._drp.infer(blob, raw=True)
+                return self._decode_v8_raw(outs, scale, dw, dh, h0, w0)
             outs = self._drp.infer(blob)
             if self.format == "yolov3":
                 return self._decode_v3(outs, scale, dw, dh, h0, w0)
-            if self.format == "yolov8-raw":
-                return self._decode_v8_raw(outs, scale, dw, dh, h0, w0)
             return self._decode_v8(outs[0][0], scale, dw, dh, h0, w0)
+
+        rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB)
 
         if self.in_dtype == np.float32:
             blob = (rgb.astype(np.float32) / 255.0)[None]
@@ -410,7 +423,7 @@ class YoloDetector:
         logit_thres = float(np.log(self.conf_thres / (1.0 - self.conf_thres)))
         all_xyxy, all_scores, all_cls = [], [], []
         for box_i, cls_i, h, w, stride in self.raw_scales:
-            cls = outs[cls_i][0]                               # [nc, H, W]
+            cls = _as_f32(outs[cls_i][0])                      # [nc, H, W]
             if self.nc == 1:
                 best, cls_ids = cls[0], None
             else:
@@ -429,7 +442,7 @@ class YoloDetector:
             scores = _sigmoid(best[ys, xs])
             # DFL: each side's distance is the expectation of a softmax over
             # reg_max bins, in grid cells. [4*reg_max, n] -> [4, reg_max, n]
-            d = outs[box_i][0][:, ys, xs].reshape(4, self.reg_max, -1)
+            d = _as_f32(outs[box_i][0][:, ys, xs]).reshape(4, self.reg_max, -1)
             d = np.exp(d - d.max(axis=1, keepdims=True))
             d = (d * self._dfl_bins[None, :, None]).sum(axis=1) / d.sum(axis=1)
             cx, cy = xs + 0.5, ys + 0.5

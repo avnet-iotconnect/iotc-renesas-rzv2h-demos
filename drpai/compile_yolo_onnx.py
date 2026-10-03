@@ -8,7 +8,8 @@ $TVM_ROOT/tutorials:
 
     python3 compile_yolo_onnx.py <model.onnx> <calibration-image-dir> <output-dir> [extra args]
 
-Extra arguments are passed straight to Renesas' script (e.g. --mera1).
+Extra arguments are passed straight to Renesas' script (e.g. --mera1), except
+--keep-head, which stops this wrapper cutting the model's decode tail off.
 
 Renesas' ``compile_onnx_model_quant.py`` does the whole job (TVM frontend,
 INT8 calibration, DRP-AI Translator, cross-compile for the board), but it
@@ -18,6 +19,11 @@ it will never see wrecks the quantization ranges, so this wrapper swaps that
 one step for the preprocessing ``detectors/yolo_detector.py`` uses at
 runtime — letterbox to the model's input size, RGB, scale to [0, 1] — and
 leaves everything else to Renesas' script.
+
+It also cuts an Ultralytics YOLOv8 export's decode tail off first
+(``cut_yolov8_head.py``): left in, that tail is compiled for the CPU in half
+precision and costs more than the network does on the accelerator (stock
+YOLOv8n on the RZ/V2H: 67 ms with the tail, 15 ms without).
 """
 
 import os
@@ -67,7 +73,18 @@ def main():
         sys.exit(__doc__)
     onnx_path, calib_dir, out_dir = sys.argv[1:4]
     extra = sys.argv[4:]
+    keep_head = "--keep-head" in extra
+    extra = [a for a in extra if a != "--keep-head"]
     size = model_input_size(onnx_path)
+
+    if not keep_head:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from cut_yolov8_head import cut
+        cut_path = os.path.join(os.path.dirname(os.path.abspath(onnx_path)), "model_cut.onnx")
+        if cut(onnx_path, cut_path):
+            onnx_path = cut_path
+        else:
+            print("[compile_yolo_onnx] no Ultralytics Detect head found — compiling the model as it is")
 
     with open(SAMPLE) as f:
         src = f.read()

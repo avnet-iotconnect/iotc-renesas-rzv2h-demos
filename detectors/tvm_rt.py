@@ -209,6 +209,18 @@ def _free_slot(owner):
     _slots[:] = [s for s in _slots if s[2] != id(owner)]
 
 
+# NumPy converts float16 in software (~10 ns per element on the Cortex-A55),
+# which made reading a YOLOv8 model's outputs cost nearly as much as running
+# it. A 65536-entry table indexed by the raw bit pattern is several times
+# faster.
+_F16_TO_F32 = np.arange(65536, dtype=np.uint16).view(np.float16).astype(np.float32)
+
+
+def f16_to_f32(a):
+    """float16 array -> float32, via lookup table."""
+    return _F16_TO_F32[a.view(np.uint16)]
+
+
 _NP_DTYPES = {(2, 32): np.float32, (2, 16): np.float16, (2, 64): np.float64,
               (0, 64): np.int64, (0, 32): np.int32, (0, 8): np.int8,
               (1, 8): np.uint8}
@@ -327,8 +339,10 @@ class DrpAiModel:
     def run(self):
         _call(self._func("run"))
 
-    def get_output(self, index):
-        """Output ``index`` as a float32 numpy array (copied out of the runtime)."""
+    def get_output(self, index, raw=False):
+        """Output ``index`` copied out of the runtime: as float32, or with
+        ``raw=True`` in the model's own dtype (DRP-AI heads are float16 —
+        convert just the parts you need with ``f16_to_f32``)."""
         handle, code = _call(self._func("get_output"), int(index))
         try:
             t = ctypes.cast(handle, ctypes.POINTER(_DLTensor)).contents
@@ -336,15 +350,19 @@ class DrpAiModel:
             n = int(np.prod(shape)) * np.dtype(dtype).itemsize
             buf = (ctypes.c_char * n).from_address(t.data + t.byte_offset)
             out = np.frombuffer(buf, dtype=dtype).reshape(shape)
-            return out.astype(np.float32)  # astype copies; DRP-AI heads are fp16
+            if raw:
+                return out.copy()
+            if dtype is np.float16:
+                return f16_to_f32(out)
+            return out.astype(np.float32)
         finally:
             if code == _K_NDARRAY:
                 _lib.TVMArrayFree(ctypes.c_void_p(handle))
 
-    def get_outputs(self):
-        return [self.get_output(i) for i in range(self.num_outputs)]
+    def get_outputs(self, raw=False):
+        return [self.get_output(i, raw=raw) for i in range(self.num_outputs)]
 
-    def infer(self, array):
+    def infer(self, array, raw=False):
         self.set_input(0, array)
         self.run()
-        return self.get_outputs()
+        return self.get_outputs(raw=raw)
