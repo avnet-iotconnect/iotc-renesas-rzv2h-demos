@@ -502,6 +502,8 @@ class _YoloBallFollowExcludingBox(YoloBallFollowMode):
         self._frames_since_hull = 0
 
     def process_frame(self, frame, arm):
+        if self._box_lower is None:  # no box colour calibrated — nothing to exclude
+            return super().process_frame(frame, arm)
         # Build/refresh the box hull BEFORE detection so _detect_ball can use it.
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         bm = cv2.inRange(hsv, self._box_lower, self._box_upper)
@@ -569,8 +571,10 @@ class YoloPickPlaceMode(PickPlaceMode):
 
     def _enter_ball_phase(self, arm):
         suffix = " + depth overlay" if self.depth_detector is not None else ""
+        box_note = ("balls inside the box are ignored" if self.lower is not None
+                    else "no box colour, so no box exclusion")
         print("[yolo-pickplace] entering BALL_PHASE (YOLO ball detection; "
-              f"balls inside the box are ignored){suffix}")
+              f"{box_note}){suffix}")
         self.state = "BALL_PHASE"
         self.ball_mode = _YoloBallFollowExcludingBox(
             self.lower, self.upper, self.detector,

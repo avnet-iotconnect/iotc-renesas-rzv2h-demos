@@ -1403,7 +1403,6 @@ def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
                          daemon=True, name="webrtc-push").start()
 
     _current_mode = mode
-    mode.setup(arm)
 
     # rolling perf counters
     n = 0
@@ -1420,6 +1419,8 @@ def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
                               cv2.WINDOW_FULLSCREEN)
 
     try:
+        mode.setup(arm)
+
         # wait briefly for first frame
         t0 = time.time()
         while cam.read() is None and time.time() - t0 < 2.0:
@@ -1478,7 +1479,10 @@ def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
                 t_window_start = time.time()
     finally:
         _webrtc_push_stop.set()
-        mode.teardown(arm)
+        try:
+            mode.teardown(arm)
+        except Exception as e:
+            print(f"[run_mode] teardown failed: {e}")
         cam.release()
         if not headless:
             cv2.destroyAllWindows()
@@ -1590,6 +1594,17 @@ def main():
                     run_mode(arm, mode, camera_index=args.camera,
                              headless=args.headless, perf_every=args.perf_every,
                              web_port=args.web_port)
+                except Exception as e:
+                    # A mode that can't start (missing calibration file, bad
+                    # model, ...) must not take the app down: exiting drops
+                    # servo torque and the cloud session, so the operator
+                    # loses the arm and the dashboard at once. Fall back to
+                    # idle — arm holding, IOTCONNECT up — and say why.
+                    print(f"[supervisor] mode '{current_mode_name}' failed: {e}")
+                    traceback.print_exc()
+                    print("[supervisor] returning to IDLE — fix the cause above, "
+                          "then send set_mode again")
+                    set_pending_action(('stop_mode',))
                 finally:
                     # Unload the model now, not whenever the GC gets to it: the
                     # DRP-AI is one shared accelerator, and the next mode or a

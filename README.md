@@ -257,9 +257,9 @@ loads them at start.
 | File | What it holds | Needed | Tool |
 |---|---|---|---|
 | `scan_poses.json` | Arm poses the camera sweeps through while searching | When the built-in poses don't suit your table | `./teach.sh` |
-| `box_color.json` | HSV range of the drop box | Always, for pick-and-place | `python3 browser_calibrate.py --output box_color.json` |
+| `drop_pose.json` | Arm pose for the drop | Recommended — pick-and-place needs this **or** `box_color.json` | cloud command `teach_drop_pose` |
+| `box_color.json` | HSV range of the drop box | Needed without a drop pose (the arm then finds the box by colour). With one, it is optional and only makes the arm ignore balls already in the box | `python3 browser_calibrate.py --output box_color.json`, or cloud command `calibrate target=box` |
 | `grab_depth.json` | How big the ball looks at the moment of the grab | Always | `./teach_grab.sh --web-port 8080` |
-| `drop_pose.json` | Arm pose for the drop | Recommended | cloud command `teach_drop_pose` |
 | `camera_settings.json` | Locked exposure / white balance / saturation | When lighting changes | cloud command `camera_preset <name>` |
 
 **Scan poses** — `./teach.sh`. Pose the arm at each prompted position (near and
@@ -516,7 +516,8 @@ this board; the radius gate does not need one.
 | Ball visible but never detected | Check `python3 yolo_selftest.py` with the ball in view. Lower the threshold (`YOLO_CONF=0.3`); if it still fails, the ball or lighting differs from the training set — retrain ([CUSTOM_DRPAI_DETECTOR.md](CUSTOM_DRPAI_DETECTOR.md)) |
 | Arm tracks but never grabs | The gate isn't satisfied: read the gate line in the overlay, then re-teach with `./teach_grab.sh` or send `set_grab_radius <px>` |
 | Arm steers away from the ball | `PAN_DIR` / `TILT_DIR` sign is wrong for your mounting |
-| `box_color.json not found` | Calibrate the box colour ([§5](#5-per-site-calibration)) |
+| `pick-and-place needs a drop target` | Neither a drop pose nor a box colour has been taught ([§5](#5-per-site-calibration)). The app drops back to idle and stays connected; teach one and send `set_mode` again |
+| A mode fails to start | The reason is printed as `[supervisor] mode '<name>' failed: …`. The app returns to idle with the arm holding and /IOTCONNECT connected |
 | Telemetry missing in /IOTCONNECT | The device isn't on the `robarmV2H` template — undeclared attributes are dropped silently |
 | No preview window on HDMI | Weston must be running (`systemctl status weston`) with a monitor connected; `start.sh` attaches to it through `deploy/display_env.sh`. The calibrators with an OpenCV window need `./launch_gui.sh <tool>` |
 

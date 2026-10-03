@@ -134,6 +134,8 @@ class _BallFollowExcludingBox(BallFollowMode):
         # ball-detection logic — it'll call self._largest_blob which uses the
         # hull we set here. If the box isn't visible this frame, fall back to
         # the cached hull from a recent frame (up to _stale_frames old).
+        if self._box_lower is None:  # no box colour calibrated — nothing to exclude
+            return super().process_frame(frame, arm)
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         bm = cv2.inRange(hsv, self._box_lower, self._box_upper)
         bm = cv2.morphologyEx(bm, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
@@ -271,15 +273,18 @@ class PickPlaceMode(Mode):
         self.ball_mode = None             # BallFollowMode, lazily created
 
     def setup(self, arm):
-        if not os.path.exists(BOX_COLOR_PATH):
-            raise RuntimeError(
-                f"box_color.json not found at {BOX_COLOR_PATH}. "
-                "Run: python3 ball_calibrate.py --output box_color.json")
-        with open(BOX_COLOR_PATH) as f:
-            cfg = json.load(f)
-        self.lower = np.array([cfg["h_min"], cfg["s_min"], cfg["v_min"]], dtype=np.uint8)
-        self.upper = np.array([cfg["h_max"], cfg["s_max"], cfg["v_max"]], dtype=np.uint8)
-        print(f"[pickplace] box HSV: lower={self.lower.tolist()} upper={self.upper.tolist()}")
+        if os.path.exists(BOX_COLOR_PATH):
+            with open(BOX_COLOR_PATH) as f:
+                cfg = json.load(f)
+            self.lower = np.array([cfg["h_min"], cfg["s_min"], cfg["v_min"]], dtype=np.uint8)
+            self.upper = np.array([cfg["h_max"], cfg["s_max"], cfg["v_max"]], dtype=np.uint8)
+            print(f"[pickplace] box HSV: lower={self.lower.tolist()} upper={self.upper.tolist()}")
+        else:
+            # No box colour. That is workable only with a taught drop pose
+            # (checked below): the drop target is then known, and the colour
+            # would only be used to ignore balls already lying in the box.
+            print(f"[pickplace] no box_color.json — balls already inside the box "
+                  "are NOT ignored (calibrate target=box to enable that)")
 
         # Optional hand-taught drop pose. When present, transport drives here
         # instead of using box_pose - DROP_LIFT_OFFSET. Captured via the
@@ -296,6 +301,13 @@ class PickPlaceMode(Mode):
                 self.drop_pose = None
         else:
             print(f"[pickplace] no drop_pose.json — transport will use box_pose with shoulder_lift -{DROP_LIFT_OFFSET}")
+
+        if self.lower is None and self.drop_pose is None:
+            raise RuntimeError(
+                "pick-and-place needs a drop target: teach one (release_torque, "
+                "pose the gripper over the box, hold_pose, teach_drop_pose) or "
+                "calibrate the box colour so the arm can find it "
+                "(calibrate target=box, or python3 browser_calibrate.py --output box_color.json)")
 
         if self.drop_pose is not None:
             # drop_pose.json is the canonical drop target — skip the whole
