@@ -4,7 +4,7 @@
 """Standalone YOLO pick-and-place app (DRP-AI-accelerated ball detection).
 
 Separate entry point from main.py — it does not register a mode, touch
-make_mode, or run the IoTConnect command pump, so it is the quickest way to
+make_mode, or run the IOTCONNECT command pump, so it is the quickest way to
 try a model or a threshold with no cloud in the loop. It reuses main.py's
 camera worker (_FreshCamera) and arm wrapper (ShadowArm) read-only.
 

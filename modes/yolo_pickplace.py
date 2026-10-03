@@ -458,7 +458,7 @@ class YoloBallFollowMode(BallFollowMode):
 
     def telemetry(self):
         """Extend BallFollowMode.telemetry with inference perf + depth gate
-        state so IoTConnect can graph yolo_ms / depth_ms / npu_fps and the
+        state so IOTCONNECT can graph yolo_ms / depth_ms / npu_fps and the
         depth_settle counter. Field names match the Tria demo's template so
         the same dashboard works; ``backend`` says where YOLO actually ran."""
         base = super().telemetry()
