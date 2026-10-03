@@ -260,6 +260,7 @@ loads them at start.
 | `drop_pose.json` | Arm pose for the drop | Recommended — pick-and-place needs this **or** `box_color.json` | cloud command `teach_drop_pose` |
 | `box_color.json` | HSV range of the drop box | Needed without a drop pose (the arm then finds the box by colour). With one, it is optional and only makes the arm ignore balls already in the box | `python3 browser_calibrate.py --output box_color.json`, or cloud command `calibrate target=box` |
 | `grab_depth.json` | How big the ball looks at the moment of the grab | Always | `./teach_grab.sh --web-port 8080` |
+| `approach_limits.json` | How far down the arm may reach while approaching (`{"lift_max": N}`) | Recommended — the default suits a different table height | Edit by hand: the `shoulder_lift` value at a successful grab, plus ~30 |
 | `camera_settings.json` | Locked exposure / white balance / saturation | When lighting changes | cloud command `camera_preset <name>` |
 
 **Scan poses** — `./teach.sh`. Pose the arm at each prompted position (near and
@@ -289,7 +290,17 @@ The grab gate then fires when the ball looks at least that big (minus
 **Drop pose** — from /IOTCONNECT send `release_torque`, hand-pose the gripper
 above the box, send `hold_pose`, then `teach_drop_pose`.
 
-**Camera** — a camera left on auto-exposure drifts, and yesterday's colour
+**Camera** — this matters more than any other setting. The model needs the
+ball to look like a bright, saturated yellow ball, and the camera's automatic
+modes work against that: auto white balance over a dark mat drains the ball's
+colour, auto exposure over a white table leaves it dark. On the reference rig
+(black mat, dim room) the ball scored 0.3 on automatic settings and 0.93–0.95
+with white balance fixed at 2800 K, exposure 400 and gain 20 — and a warmer
+white balance turned the white table yellow enough to be detected as a ball.
+Check with `python3 yolo_selftest.py` and the ball in view: aim for a
+confidence above 0.8 on the ball and no other detections.
+
+A camera left on auto-exposure also drifts, and yesterday's colour
 calibration stops matching. Send `camera_preset normal` (or `bright`, `dim`,
 `vivid`, `warm`, `cool`) to lock it; tune individual values with
 `camera_setting <name> <value>` and keep the result with
@@ -513,8 +524,9 @@ this board; the radius gate does not need one.
 | ~15 fps camera instead of 30 | Same cause — the V4L2 backend needs the frame rate requested, which `open_capture()` does |
 | Demo runs on `backend=CPU` | No DRP-AI ball model installed; that is the default. See [§1](#1-how-it-works-on-the-rzv2h) |
 | TVM error when a mode starts | Another process is using DRP-AI (a Renesas HDMI demo, a second copy of this app), or the model was compiled with a different DRP-AI TVM version than the board's `libtvm_runtime.so` |
-| Ball visible but never detected | Almost always exposure, not the threshold: under the arm's shadow the ball comes out dark brown and scores below 0.05. Send `camera_setting auto` (or raise `exposure` / `gain`) until the ball looks bright yellow in the view. It also scores lower when it fills much of the frame — teach the scan poses higher above the table. If it still fails with a well-lit ball, retrain ([CUSTOM_DRPAI_DETECTOR.md](CUSTOM_DRPAI_DETECTOR.md)) |
+| Ball visible but never detected | Almost always the camera, not the threshold: too dark, or washed out by auto white balance, the ball scores below 0.3. Fix white balance (`camera_setting auto_wb 0`, `camera_setting wb_temperature 2800`) and raise `exposure` / `gain` until the ball looks bright yellow in the view — see the camera notes in [§5](#5-per-site-calibration). It also scores lower when it fills much of the frame — teach the scan poses higher above the table. If it still fails with a well-lit ball, retrain ([CUSTOM_DRPAI_DETECTOR.md](CUSTOM_DRPAI_DETECTOR.md)) |
 | Arm tracks but never grabs | The gate isn't satisfied: read the gate line in the overlay, then re-teach with `./teach_grab.sh` or send `set_grab_radius <px>` |
+| Arm chases something that isn't a ball | A bright yellow-looking surface is being detected — usually a white surface under a white balance that is too warm. Lower `wb_temperature` until white looks white |
 | Arm steers away from the ball | `PAN_DIR` / `TILT_DIR` sign is wrong for your mounting |
 | `pick-and-place needs a drop target` | Neither a drop pose nor a box colour has been taught ([§5](#5-per-site-calibration)). The app drops back to idle and stays connected; teach one and send `set_mode` again |
 | A mode fails to start | The reason is printed as `[supervisor] mode '<name>' failed: …`. The app returns to idle with the arm holding and /IOTCONNECT connected |

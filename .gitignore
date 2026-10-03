@@ -32,6 +32,7 @@ camera_presets.json
 cam_gripper_offset.json
 grab_depth.json
 grab_threshold.json
+approach_limits.json
 iotcDeviceConfig.json
 device-cert.pem
 device-pkey.pem

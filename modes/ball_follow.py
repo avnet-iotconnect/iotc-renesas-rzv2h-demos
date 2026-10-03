@@ -68,6 +68,22 @@ PAN_MAX = 860              # 2026-07-19: widened from [300, 800] to cover the ta
 # mis-set TARGET_RADIUS_PX) can't drive the gripper into the table. Tune by teach-mode probing.
 LIFT_MAX = 800             # shoulder_lift ceiling during approach (larger = reach further down)
 ELBOW_MAX = 500            # elbow_flex ceiling during approach
+# The two ceilings above depend on how high the table sits under this arm and
+# on the taught scan poses, so calibration can override them per rig in
+# approach_limits.json ({"lift_max": N, "elbow_max": N}). Getting lift_max
+# right matters: too high a value lets a never-satisfied grab gate drive the
+# gripper into the table.
+APPROACH_LIMITS_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "approach_limits.json")
+if os.path.exists(APPROACH_LIMITS_PATH):
+    try:
+        with open(APPROACH_LIMITS_PATH) as _f:
+            _limits = json.load(_f)
+        LIFT_MAX = int(_limits.get("lift_max", LIFT_MAX))
+        ELBOW_MAX = int(_limits.get("elbow_max", ELBOW_MAX))
+        print(f"[ball] approach limits from {APPROACH_LIMITS_PATH}: "
+              f"lift_max={LIFT_MAX} elbow_max={ELBOW_MAX}")
+    except (OSError, ValueError, TypeError) as _e:
+        print(f"[ball] could not load {APPROACH_LIMITS_PATH}: {_e}")
 SCAN_DWELL_S = 1.5         # hold each scan pose this long before advancing
 SCAN_MOVE_MS = 2500        # duration for the move between scan poses (slowed so right-pose lift=635 doesn't plunge toward table)
 NO_BALL_GRACE_FRAMES = 30  # ~5s at 6 fps — hold pose when ball briefly disappears (clipping, HSV flicker) instead of bouncing back to scan; the scan re-entry was producing the visible "shaking" between brief-track and scan-move every time detection flickered
