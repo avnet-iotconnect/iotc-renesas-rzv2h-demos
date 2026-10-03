@@ -21,6 +21,7 @@ sequence, scan/predict logic, telemetry and box handling are all inherited.
 
 import json
 import os
+import threading
 import time
 
 import cv2
@@ -157,11 +158,38 @@ class YoloBallFollowMode(BallFollowMode):
         cx_target = w // 2 + bf.CAM_GRIPPER_OFFSET_X
         cy_target = h // 2 + bf.CAM_GRIPPER_OFFSET_Y
 
-        try:
-            pos = bf._read_all_positions(arm)
-        except Exception as e:
-            print(f"[yolo-ball] position read failed entirely — skipping frame: {e}")
-            return cv2.flip(frame, 1)
+        # Reading the six servo positions costs ~115 ms on the RZ/V2H (USB
+        # full-speed HID through libusb) — as long as the inference itself.
+        # While tracking, do the two at the same time: the reads run on a
+        # helper thread while this thread runs YOLO. Both release the GIL,
+        # and nothing else touches the arm until the join below, so the HID
+        # stream still only ever has one user.
+        early_detect = None
+        if self.hold_target is None:
+            box = {}
+
+            def _read():
+                try:
+                    box["pos"] = bf._read_all_positions(arm)
+                except Exception as e:
+                    box["err"] = e
+
+            reader = threading.Thread(target=_read, name="servo-read")
+            reader.start()
+            t_detect_start = time.perf_counter()
+            early_detect = (self._detect_ball(frame),
+                            time.perf_counter() - t_detect_start)
+            reader.join()
+            if "err" in box:
+                print(f"[yolo-ball] position read failed entirely — skipping frame: {box['err']}")
+                return cv2.flip(frame, 1)
+            pos = box["pos"]
+        else:
+            try:
+                pos = bf._read_all_positions(arm)
+            except Exception as e:
+                print(f"[yolo-ball] position read failed entirely — skipping frame: {e}")
+                return cv2.flip(frame, 1)
 
         if self.hold_target is not None:
             gpos = pos[bf.SERVO_GRIPPER]
@@ -178,9 +206,22 @@ class YoloBallFollowMode(BallFollowMode):
                 self._maybe_send_telemetry(arm, send_telemetry, positions=pos)
                 return annotated
 
-        t_detect_start = time.perf_counter()
-        real_ball = self._detect_ball(frame)
-        t_detect = time.perf_counter() - t_detect_start
+        if early_detect is not None:
+            real_ball, t_detect = early_detect
+        else:
+            t_detect_start = time.perf_counter()
+            real_ball = self._detect_ball(frame)
+            t_detect = time.perf_counter() - t_detect_start
+        # Inference perf EWMAs (alpha=0.1 = ~10-frame moving average), updated
+        # on every frame so the on-screen and telemetry numbers are the real
+        # inference time and loop rate whether or not a ball is in view.
+        a = 0.1
+        self._yolo_ms_ewma = a * (t_detect * 1000.0) + (1 - a) * self._yolo_ms_ewma
+        now_p = time.perf_counter()
+        if self._last_frame_t is not None and now_p - self._last_frame_t < 2.0:
+            self._frame_ms_ewma = (a * ((now_p - self._last_frame_t) * 1000.0)
+                                   + (1 - a) * self._frame_ms_ewma)
+        self._last_frame_t = now_p
 
         is_prediction = False
         ball = real_ball
@@ -270,14 +311,7 @@ class YoloBallFollowMode(BallFollowMode):
                 print(f"[yolo-ball] depth inference failed: {e}")
                 self.last_depth_at_ball = None
                 self.last_depth_at_ball_smoothed = None
-        # Inference perf EWMAs (alpha=0.1 = ~10-frame moving average)
-        a = 0.1
-        self._yolo_ms_ewma = a * (t_detect * 1000.0) + (1 - a) * self._yolo_ms_ewma
         self._depth_ms_ewma = a * depth_ms + (1 - a) * self._depth_ms_ewma
-        now_p = time.perf_counter()
-        if self._last_frame_t is not None:
-            self._frame_ms_ewma = a * ((now_p - self._last_frame_t) * 1000.0) + (1 - a) * self._frame_ms_ewma
-        self._last_frame_t = now_p
         if is_prediction:
             cv2.putText(annotated, f"PREDICTING ({self.pred_frames_remaining} left)",
                         (10, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.55,

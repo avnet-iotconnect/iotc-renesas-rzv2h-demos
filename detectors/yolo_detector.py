@@ -62,16 +62,16 @@ def is_drpai_model(path):
     return bool(path) and os.path.isfile(os.path.join(path, "deploy.so"))
 
 
-def default_ball_model(use_drpai=True):
+def default_ball_model(use_drpai=True, drpai_only=False):
     """Pick the best available ball model: (path, default confidence).
 
     Order: custom DRP-AI model -> custom TFLite on the CPU -> stock COCO
     YOLOv3 on DRP-AI. A model trained on the actual ball beats COCO's generic
     ``sports ball`` class even when it has to run on the CPU. ``use_drpai=False``
-    skips the DRP-AI entries."""
+    skips the DRP-AI entries; ``drpai_only=True`` skips the CPU one."""
     if use_drpai and is_drpai_model(CUSTOM_DRPAI_MODEL):
         return CUSTOM_DRPAI_MODEL, CUSTOM_MODEL_CONF
-    if os.path.exists(CUSTOM_TFLITE_MODEL):
+    if os.path.exists(CUSTOM_TFLITE_MODEL) and not drpai_only:
         return CUSTOM_TFLITE_MODEL, CUSTOM_MODEL_CONF
     if use_drpai and is_drpai_model(STOCK_DRPAI_MODEL):
         return STOCK_DRPAI_MODEL, 0.25
@@ -424,7 +424,7 @@ class YoloDetector:
 
 
 def make_ball_detector(model_name=None, conf_thres=None, use_drpai=True,
-                       class_ids="auto", **kwargs):
+                       class_ids="auto", drpai_only=False, **kwargs):
     """Factory: build a YoloDetector aimed at the ball.
 
     ``model_name=None`` picks the best available model (``default_ball_model``).
@@ -440,7 +440,8 @@ def make_ball_detector(model_name=None, conf_thres=None, use_drpai=True,
     if model_name:
         path, default_conf = model_name, None
     else:
-        path, default_conf = default_ball_model(use_drpai=use_drpai)
+        path, default_conf = default_ball_model(use_drpai=use_drpai,
+                                                drpai_only=drpai_only)
     if not use_drpai and is_drpai_model(path):
         raise RuntimeError(f"{path} is a DRP-AI model but DRP-AI use was disabled; "
                            "pass a .tflite model to run on the CPU")

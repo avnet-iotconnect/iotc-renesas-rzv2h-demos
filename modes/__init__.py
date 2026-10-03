@@ -40,16 +40,19 @@ def make_mode(name: str) -> Mode:
         from detectors import make_ball_detector, DepthDetector, default_depth_model
         from .yolo_pickplace import YoloPickPlaceMode, YoloBallFollowMode
 
-        # main.py has no --conf/--model flags, so allow overriding the YOLO
-        # defaults via env vars when launched through ./start.sh, e.g.
+        # Backend and confidence come from yolo_config.json (cloud commands
+        # set_backend / set_yolo_conf). Env vars override it when launched
+        # through ./start.sh, e.g.
         #   YOLO_CONF=0.3 ./start.sh --mode yolo-pickplace
         #   YOLO_CPU=1 ./start.sh ...     (skip DRP-AI models)
-        use_drpai = not os.environ.get("YOLO_CPU")
-        conf = os.environ.get("YOLO_CONF")
+        import yolo_config
+        backend = "cpu" if os.environ.get("YOLO_CPU") else yolo_config.get_backend()
+        use_drpai = backend != "cpu"
+        conf = os.environ.get("YOLO_CONF") or yolo_config.get_conf()
         detector = make_ball_detector(
             model_name=os.environ.get("YOLO_MODEL"),
             conf_thres=float(conf) if conf else None,
-            use_drpai=use_drpai)
+            use_drpai=use_drpai, drpai_only=(backend == "drpai"))
 
         depth_detector = None
         depth_model = os.environ.get("DEPTH_MODEL") or default_depth_model(use_drpai)

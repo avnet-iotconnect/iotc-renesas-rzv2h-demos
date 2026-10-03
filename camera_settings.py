@@ -61,10 +61,17 @@ def open_capture(index, width=640, height=480, fps=30):
     saturation goes through a colour-balance shim that rescales the value.
     The native V4L2 backend maps every setting in SETTING_PROPS straight onto
     the UVC control, so ask for it explicitly. It needs the frame rate
-    requested too — left alone it negotiates ~15 fps instead of 30."""
+    requested too — left alone it negotiates ~15 fps instead of 30.
+
+    MJPG is requested on purpose: this image's OpenCV leaks one frame
+    (0.92 MB at 640x480) on EVERY read of a YUYV stream through the V4L2
+    backend. At camera frame rate that exhausts the board's 15 GB in well
+    under an hour, at which point it stops responding entirely. MJPG frames
+    go through a different decode path that does not leak."""
     cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
     if not cap.isOpened():
         cap = cv2.VideoCapture(index)
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     cap.set(cv2.CAP_PROP_FPS, fps)

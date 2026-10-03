@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 from xarm import Servo
 
+import demo_stats
 from .base import Mode
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ball_color.json")
@@ -533,6 +534,7 @@ class BallFollowMode(Mode):
         if actual >= GRIPPER_CLOSE_TARGET - GRIPPER_STALL_SLACK:
             print(f"[ball] gripper closed to {actual} — nothing in the jaws; back to tracking")
             arm.setPosition(SERVO_GRIPPER, GRIPPER_TRACK_POS, duration=300, wait=True)
+            demo_stats.grab_result("empty")
             return False
 
         # Stalled on the ball. Leave the servo commanded at full close so it
@@ -563,8 +565,10 @@ class BallFollowMode(Mode):
             print(f"[ball] ball slipped during lift: gripper {actual} -> {after}; back to tracking")
             self.hold_target = None
             arm.setPosition(SERVO_GRIPPER, GRIPPER_TRACK_POS, duration=300, wait=True)
+            demo_stats.grab_result("slipped")
             return False
         print(f"[ball] lifted; gripper {actual} -> {after}")
+        demo_stats.grab_result("held")
 
         arm.setPosition(HOME_POSE_KEEP_GRIP, duration=1800, wait=True)
         return True

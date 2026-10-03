@@ -28,6 +28,8 @@ import os
 import time
 
 import cv2
+
+import demo_stats
 import numpy as np
 
 from .base import Mode
@@ -347,6 +349,7 @@ class PickPlaceMode(Mode):
             if self.ball_mode.hold_target is not None:
                 self._log("ball grabbed — entering TRANSPORT")
                 self._do_transport_and_drop(arm)
+                demo_stats.drop_done()
                 if self.drop_pose is not None:
                     # No box detection in drop_pose mode — just start the next
                     # ball cycle immediately. Saves ~5–10 s vs running BOX_VERIFY.

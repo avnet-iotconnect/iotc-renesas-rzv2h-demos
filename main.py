@@ -32,7 +32,10 @@ import cv2
 import numpy as np
 
 import camera_settings as cam_settings
+import demo_stats
 import grab_threshold_store
+import hud
+import yolo_config
 import scan_poses_store
 import systemdata
 import xarm
@@ -251,7 +254,7 @@ IDLE_MODE_ALIASES = {'idle', 'none', 'stop', 'off'}
 
 # Calibration targets the supervisor knows how to spawn. Used by the new
 # parameterized `calibrate` command (target=ball|box|offset).
-CALIBRATION_TARGETS = {'ball', 'box', 'offset', 'grab_depth'}
+CALIBRATION_TARGETS = {'ball', 'box', 'offset', 'grab_depth', 'auto'}
 
 # Legacy per-target command names — kept so any IoTConnect template already
 # registered with these still works. New deployments should use `set_mode`
@@ -294,6 +297,14 @@ def _build_calibrator_argv(name, camera_index):
         'calibrate_grab_depth': [
             sys.executable, os.path.join(here, 'teach_grab_depth.py'),
             '--web-driven', '--web-port', '8000',
+            '--camera', str(camera_index),
+        ],
+        # Hands-off calibration: finds a ball, tunes the camera on it and
+        # learns the grab distance from the gripper's own feedback. The arm
+        # moves by itself; progress is shown at http://<board-ip>:8000/.
+        'calibrate_auto': [
+            sys.executable, os.path.join(here, 'auto_calibrate.py'),
+            '--web-port', '8000',
             '--camera', str(camera_index),
         ],
     }
@@ -643,6 +654,43 @@ def process_iotconnect_commands(arm):
             elif command_name == 'stop_demo':
                 set_pending_action(('stop_mode',))
                 ack_message = "Stopping mode — entering IDLE (cloud stays connected)"
+            elif command_name == 'set_backend':
+                # set_backend drpai|cpu|auto — persist the choice and, if a
+                # YOLO mode is running, restart it so the detector is rebuilt
+                # on the new backend (the live CPU-vs-DRP-AI comparison).
+                try:
+                    backend = yolo_config.set_backend(
+                        _extract_arg(command_args, 'backend', 'value', 'name'))
+                    ack_message = f"YOLO backend set to {backend}"
+                    running = getattr(_current_mode, 'name', '') or ''
+                    if running.startswith('yolo-'):
+                        set_pending_action(('switch_mode', running))
+                        ack_message += f"; restarting {running}"
+                except ValueError as e:
+                    ack_status = C2dAck.CMD_FAILED
+                    ack_message = f"set_backend: {e}"
+            elif command_name == 'set_yolo_conf':
+                # set_yolo_conf 0.4 | auto — applied to the running detector
+                # immediately, and persisted.
+                try:
+                    conf = yolo_config.set_conf(
+                        _extract_arg(command_args, 'conf', 'value', 'name'))
+                    det = getattr(_current_mode, 'detector', None)
+                    if det is not None and conf is not None:
+                        det.conf_thres = conf
+                        ack_message = f"YOLO confidence set to {conf} (applied live)"
+                    else:
+                        ack_message = (f"YOLO confidence set to "
+                                       f"{'model default' if conf is None else conf} "
+                                       "(applies when a YOLO mode next starts)")
+                except ValueError as e:
+                    ack_status = C2dAck.CMD_FAILED
+                    ack_message = f"set_yolo_conf: {e}"
+            elif command_name == 'yolo_config_show':
+                det = getattr(_current_mode, 'detector', None)
+                running = (f"; running on {det.backend} at conf {det.conf_thres}"
+                           if det is not None else "")
+                ack_message = yolo_config.describe() + running
             elif command_name in MODE_SWITCH_COMMANDS:
                 new_mode = MODE_SWITCH_COMMANDS[command_name]
                 set_pending_action(('switch_mode', new_mode))
@@ -1153,6 +1201,7 @@ def _telemetry_worker_loop():
                 'sysInfo_memory': mem_obj,
                 'sysInfo_storage': asdict(sysdata.storage),
                 'sysInfo_gpu': {'usage_percent': sysdata.gpu_usage, 'temp': sysdata.gpu_temp},
+                'demoStats': demo_stats.snapshot(),
             }
             if extras:
                 telemetry.update(extras)
@@ -1348,6 +1397,24 @@ def pad_for_display(img, aspect=16 / 9):
                               cv2.BORDER_CONSTANT, value=(0, 0, 0))
 
 
+def _hud_info(mode, fps):
+    """What the HDMI status panel shows for the running mode."""
+    info = {
+        "mode": mode.name,
+        "state": mode.get_state(),
+        "fps": fps,
+        "cloud": iotc_publisher is not None and iotc_publisher.is_connected(),
+        "stats": demo_stats.snapshot(),
+    }
+    det = getattr(mode, "detector", None)
+    if det is not None:
+        info["backend"] = det.backend
+        # In pick-and-place the tracker lives one level down (mode.ball_mode).
+        tracker = getattr(mode, "ball_mode", None) or mode
+        info["yolo_ms"] = getattr(tracker, "_yolo_ms_ewma", 0.0)
+    return info
+
+
 def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
              window_title="IOTCONNECT XArm Control", headless=False, perf_every=30,
              web_port=None):
@@ -1405,6 +1472,7 @@ def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
     _current_mode = mode
 
     # rolling perf counters
+    hud_fps = 0.0
     n = 0
     t_cap_sum = 0.0
     t_proc_sum = 0.0
@@ -1442,7 +1510,7 @@ def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
                 display = frame
 
             if not headless:
-                cv2.imshow(window_title, pad_for_display(display))
+                cv2.imshow(window_title, hud.compose(display, _hud_info(mode, hud_fps)))
                 key = cv2.waitKey(1)
                 if key == 27 or key == 113:
                     break
@@ -1463,6 +1531,8 @@ def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
                 break
 
             t_total = time.perf_counter() - frame_t0
+            if t_total > 0:
+                hud_fps = 0.9 * hud_fps + 0.1 * (1.0 / t_total) if hud_fps else 1.0 / t_total
             n += 1
             t_cap_sum += t_cap
             t_proc_sum += t_proc

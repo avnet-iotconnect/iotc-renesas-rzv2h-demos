@@ -588,6 +588,88 @@
                 }
             ],
             "aggregateTypes": []
+        },
+        {
+            "name": "demoStats",
+            "displayName": "",
+            "type": "OBJECT",
+            "description": "Pick-and-place counters since the app started.",
+            "attributeColor": "",
+            "aggregateTypes": [],
+            "childs": [
+                {
+                    "name": "drops",
+                    "displayName": "",
+                    "type": "INTEGER",
+                    "description": "Balls carried to the drop pose and released.",
+                    "unit": "",
+                    "attributeColor": ""
+                },
+                {
+                    "name": "grab_attempts",
+                    "displayName": "",
+                    "type": "INTEGER",
+                    "description": "Times the gripper closed on a tracked ball.",
+                    "unit": "",
+                    "attributeColor": ""
+                },
+                {
+                    "name": "grabs_held",
+                    "displayName": "",
+                    "type": "INTEGER",
+                    "description": "Grabs where the ball was still held after the lift.",
+                    "unit": "",
+                    "attributeColor": ""
+                },
+                {
+                    "name": "grabs_empty",
+                    "displayName": "",
+                    "type": "INTEGER",
+                    "description": "Grabs where the jaws closed on nothing.",
+                    "unit": "",
+                    "attributeColor": ""
+                },
+                {
+                    "name": "grabs_slipped",
+                    "displayName": "",
+                    "type": "INTEGER",
+                    "description": "Grabs where the ball was lost during the lift.",
+                    "unit": "",
+                    "attributeColor": ""
+                },
+                {
+                    "name": "grab_success_pct",
+                    "displayName": "",
+                    "type": "DECIMAL",
+                    "description": "grabs_held / grab_attempts, percent.",
+                    "unit": "",
+                    "attributeColor": ""
+                },
+                {
+                    "name": "last_cycle_s",
+                    "displayName": "",
+                    "type": "DECIMAL",
+                    "description": "Seconds between the last two completed drops.",
+                    "unit": "",
+                    "attributeColor": ""
+                },
+                {
+                    "name": "avg_cycle_s",
+                    "displayName": "",
+                    "type": "DECIMAL",
+                    "description": "Average seconds between completed drops.",
+                    "unit": "",
+                    "attributeColor": ""
+                },
+                {
+                    "name": "uptime_min",
+                    "displayName": "",
+                    "type": "DECIMAL",
+                    "description": "Minutes since the app started.",
+                    "unit": "",
+                    "attributeColor": ""
+                }
+            ]
         }
     ],
     "commands": [
@@ -944,6 +1026,27 @@
         {
             "name": "grab_threshold_reset",
             "command": "grab_threshold_reset",
+            "requiredParam": false,
+            "requiredAck": true,
+            "isOTACommand": false
+        },
+        {
+            "name": "set_backend",
+            "command": "set_backend",
+            "requiredParam": true,
+            "requiredAck": true,
+            "isOTACommand": false
+        },
+        {
+            "name": "set_yolo_conf",
+            "command": "set_yolo_conf",
+            "requiredParam": true,
+            "requiredAck": true,
+            "isOTACommand": false
+        },
+        {
+            "name": "yolo_config_show",
+            "command": "yolo_config_show",
             "requiredParam": false,
             "requiredAck": true,
             "isOTACommand": false

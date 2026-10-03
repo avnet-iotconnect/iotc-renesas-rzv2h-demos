@@ -33,6 +33,7 @@ cam_gripper_offset.json
 grab_depth.json
 grab_threshold.json
 approach_limits.json
+yolo_config.json
 iotcDeviceConfig.json
 device-cert.pem
 device-pkey.pem
