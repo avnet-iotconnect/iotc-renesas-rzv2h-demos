@@ -124,6 +124,10 @@ def main():
 
     mode.setup(arm)
     window = "YOLO XArm Pick-Place"
+    if not args.headless:
+        # Full screen on the board's HDMI output, like main.py.
+        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     try:
         t0 = time.time()
         while cam.read() is None and time.time() - t0 < 2.0:
@@ -140,7 +144,7 @@ def main():
                 display = frame
 
             if not args.headless:
-                cv2.imshow(window, display)
+                cv2.imshow(window, app.pad_for_display(display))
                 key = cv2.waitKey(1)
                 if key == 27 or key == 113:  # ESC or 'q'
                     break

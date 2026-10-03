@@ -1335,6 +1335,19 @@ class _FreshCamera:
         self.cap.release()
 
 
+def pad_for_display(img, aspect=16 / 9):
+    """Pillarbox a frame to the HDMI monitor's aspect ratio with black bars.
+    The full-screen window scales the image to fit; without this the 4:3
+    camera frame is flanked by the toolkit's light-grey window background."""
+    h, w = img.shape[:2]
+    target_w = int(round(h * aspect))
+    if target_w <= w:
+        return img
+    left = (target_w - w) // 2
+    return cv2.copyMakeBorder(img, 0, 0, left, target_w - w - left,
+                              cv2.BORDER_CONSTANT, value=(0, 0, 0))
+
+
 def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
              window_title="IOTCONNECT XArm Control", headless=False, perf_every=30,
              web_port=None):
@@ -1428,7 +1441,7 @@ def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
                 display = frame
 
             if not headless:
-                cv2.imshow(window_title, display)
+                cv2.imshow(window_title, pad_for_display(display))
                 key = cv2.waitKey(1)
                 if key == 27 or key == 113:
                     break

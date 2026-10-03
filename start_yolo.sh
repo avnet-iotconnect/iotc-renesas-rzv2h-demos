@@ -6,4 +6,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Full-screen preview on the board's HDMI monitor (--headless turns it off).
+. "$SCRIPT_DIR/deploy/display_env.sh"
+
 exec stdbuf -oL -eL python3 -u yolo_pickplace.py "$@"

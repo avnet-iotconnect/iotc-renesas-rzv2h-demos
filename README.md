@@ -51,11 +51,11 @@ cross-compile. Any DRP-AI TVM model directory (`deploy.so` / `deploy.json` /
 
 **Which model runs.** The detector takes whatever is installed, in this order:
 
-| Order | Model | Runs on | Speed (measured) | Notes |
+| Order | Model | Runs on | Detector speed (measured) | Notes |
 |---|---|---|---|---|
 | 1 | `model/ball_drpai/` — custom YOLOv8n compiled with DRP-AI TVM | **DRP-AI** | not measured yet | Best option. Not in the repo — you compile it, see [CUSTOM_DRPAI_DETECTOR.md](CUSTOM_DRPAI_DETECTOR.md) |
-| 2 | `model/ball_best.tflite` — custom YOLOv8n, INT8 | CPU (4× Cortex-A55) | ~105 ms/frame, ~8 fps loop | Bundled. What runs out of the box |
-| 3 | Stock COCO YOLOv3 from the AI SDK's R01 app | **DRP-AI** | ~48 ms/frame (38 ms inference), ~18 fps loop | Already on the SD card. Uses COCO's `sports ball` class |
+| 2 | `model/ball_best.tflite` — custom YOLOv8n, INT8 | CPU (4× Cortex-A55) | ~105 ms/frame | Bundled. What runs out of the box |
+| 3 | Stock COCO YOLOv3 from the AI SDK's R01 app | **DRP-AI** | ~48 ms/frame (38 ms inference) | Already on the SD card. Uses COCO's `sports ball` class |
 
 Why a CPU model outranks a DRP-AI one: accuracy on the actual ball. On 60
 wrist-camera validation images that contain the ball, the custom model found it
@@ -63,6 +63,12 @@ in 47; the stock COCO model found a "sports ball" in 13. A fast detector that
 misses the ball can't pick it up. Compiling the custom model for DRP-AI
 (option 1) gets you both, and the demo switches to it automatically once
 `model/ball_drpai/` exists.
+
+**Loop rate.** The control loop is slower than the detector alone: every frame
+also reads the six servo positions over USB, which costs ~115 ms on this
+board. With the arm attached the bundled CPU model runs the loop at **~3.6 fps**
+(measured). Against a simulated arm (`yolo_dryrun.py`) the same loop reaches
+~8 fps on the CPU model and ~18 fps on the stock DRP-AI model.
 
 To force a specific model: `YOLO_MODEL=/home/weston/R01_object_detection/exe_v2h/yolov3_onnx ./start.sh`.
 
@@ -90,8 +96,8 @@ still supported as an option (see [§9](#9-other-modes-and-options)).
 
 ### Optional
 
-- HDMI monitor — shows the annotated camera view. Not needed: the same view is
-  served to any browser on the LAN
+- HDMI monitor — the demo shows the annotated camera view on it full screen.
+  Not needed: the same view is served to any browser on the LAN
 - USB hub — the EVK has few USB-A ports once the arm and camera are plugged in
 
 ### Assembly
@@ -303,7 +309,9 @@ cd /root/iotc-renesas-rzv2h-robotic-arm
 ./start.sh --web-port 8080
 ```
 
-Watch the annotated camera view at `http://<board-ip>:8080/`. The log goes to
+The annotated camera view opens **full screen on the HDMI monitor** — from an
+SSH or serial shell too, since `start.sh` attaches to the board's Weston
+display itself — and is served at `http://<board-ip>:8080/`. The log goes to
 the terminal and to `run.log`.
 
 Useful variations:
@@ -312,7 +320,7 @@ Useful variations:
 ./start.sh --mode idle --web-port 8080          # connect to the cloud, don't run vision until told
 ./start.sh --mode yolo-ball --web-port 8080     # find and grab only, no drop
 ./start.sh --webrtc --web-port 8080             # + live video in the /IOTCONNECT portal (§9)
-./launch_gui.sh yolo-pickplace --web-port 8080  # + preview window on the HDMI monitor
+./start.sh --headless --web-port 8080           # browser view only, nothing on HDMI
 YOLO_CONF=0.3 ./start.sh --web-port 8080        # override the detection confidence
 YOLO_CPU=1 ./start.sh --web-port 8080           # never use DRP-AI models
 ```
@@ -408,10 +416,9 @@ attention on a new build:
 
 > [!NOTE]
 > Several of these are counted in **frames**, and the defaults were tuned on
-> the Tria at ~14 fps. This board runs the loop at ~8 fps on the CPU model and
-> ~18 fps on DRP-AI, so time-based behaviour (grace periods, settle time)
-> stretches or shrinks accordingly. Re-tune if tracking feels sluggish or
-> twitchy.
+> the Tria at ~14 fps. This board runs the loop at ~3.6 fps with the bundled
+> CPU model, so frame-counted behaviour (grace periods, settle time) takes
+> about four times longer. Re-tune if tracking feels sluggish.
 
 ---
 
@@ -511,7 +518,7 @@ this board; the radius gate does not need one.
 | Arm steers away from the ball | `PAN_DIR` / `TILT_DIR` sign is wrong for your mounting |
 | `box_color.json not found` | Calibrate the box colour ([§5](#5-per-site-calibration)) |
 | Telemetry missing in /IOTCONNECT | The device isn't on the `robarmV2H` template — undeclared attributes are dropped silently |
-| No preview window on HDMI | Start with `./launch_gui.sh <mode>`; a plain SSH shell isn't attached to Weston |
+| No preview window on HDMI | Weston must be running (`systemctl status weston`) with a monitor connected; `start.sh` attaches to it through `deploy/display_env.sh`. The calibrators with an OpenCV window need `./launch_gui.sh <tool>` |
 
 ---
 

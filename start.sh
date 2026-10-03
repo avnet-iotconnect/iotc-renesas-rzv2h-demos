@@ -1,10 +1,13 @@
 #!/bin/bash
 # Launch the IOTCONNECT XArm vision demo (default mode: yolo-pickplace).
-# Over SSH the app runs headless — add --web-port 8080 to watch in a browser.
-# For the preview window on the board's HDMI monitor use ./launch_gui.sh.
+# The annotated camera view opens full screen on the board's HDMI monitor,
+# whatever shell this is started from (SSH, serial, systemd). Add
+# --web-port 8080 to also watch in a browser, or --headless for no window.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+. "$SCRIPT_DIR/deploy/display_env.sh"
 
 LOG="$SCRIPT_DIR/run.log"
 echo "===== START $(date -u +%FT%TZ) =====" | tee "$LOG"
