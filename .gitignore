@@ -1,0 +1,64 @@
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Editor / tooling state — personal, not for the repo
+.claude/
+.vscode/
+.idea/
+
+# Per-board / personal helpers (user-specific, not the canonical bootstrap script)
+.setup_board.sh
+.tria-board-backup-*/
+
+# vim swap / undo files
+*.un~
+*.swp
+*.swo
+
+# Backup files made by deploy scripts (timestamped backups of overwritten files)
+*.bak-*
+*~
+
+# Runtime state — generated on the board, never committed:
+#   - per-board calibration values (camera, HSV, geometry)
+#   - per-deployment IoTConnect credentials
+#   - launcher logs
+#   - on-device model weights downloaded by get_model.sh
+ball_color.json
+box_color.json
+box_pose.json
+drop_pose.json
+scan_poses.json
+camera_settings.json
+camera_presets.json
+cam_gripper_offset.json
+grab_depth.json
+grab_threshold.json
+iotcDeviceConfig.json
+device-cert.pem
+device-pkey.pem
+run.log
+launch_gui.log
+calibrate.log
+calibrate_offset.log
+teach.log
+setup.log
+setup.exit
+sweep-results.txt
+teach_pose.json
+tmp/
+icons/
+model/point_net_1.pth
+model/yolov8n.onnx
+model/*.onnx
+yolov8n.pt
+
+# Custom ball-model training data + artifacts (large, regenerable)
+dataset/
+runs/
+*.tflite
+*.zip
+best.pt
+best.onnx

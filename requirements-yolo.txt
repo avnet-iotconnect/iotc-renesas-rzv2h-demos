@@ -1,0 +1,15 @@
+# Extra dependency for the standalone YOLO pick-place app (yolo_pickplace.py)
+# on the Tria QCS6490 board. Install on top of the base requirements:
+#   /root/miniforge3/envs/iotc-tria-xarm/bin/python3 -m pip install -r requirements-yolo.txt
+#
+# The NPU runtime on this board is TFLite + the QNN HTP delegate. The delegate
+# itself (/usr/lib/libQnnTFLiteDelegate.so) and the model
+# (/etc/models/yolox_quantized.tflite) are already present on the board image —
+# the only Python dependency we add is the TFLite interpreter:
+
+ai_edge_litert>=2.1.5
+
+# Notes:
+# - NOT onnxruntime: there is no aarch64-Linux QNN execution provider; stock
+#   onnxruntime would run CPU-only and never touch the Hexagon NPU.
+# - numpy + opencv come from the base requirements.txt / conda env.

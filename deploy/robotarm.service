@@ -1,0 +1,15 @@
+[Unit]
+Description=Robotic Arm pick-and-place demo (idle-start, auto-recover)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PATH=/usr/bin:/bin:/usr/sbin:/sbin
+Environment=HOME=/root
+ExecStart=/bin/sh /root/arm_watchdog.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
