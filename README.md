@@ -64,12 +64,19 @@ misses the ball can't pick it up. Compiling the custom model for DRP-AI
 (option 1) gets you both, and the demo switches to it automatically once
 `model/ball_drpai/` exists.
 
-**Loop rate.** The control loop is slower than the detector alone: every frame
-also reads the six servo positions over USB (~115 ms on this board) and draws
-the HDMI screen. The servo reads run on a helper thread while YOLO runs, which
-puts the bundled CPU model at **~4.9 fps** with the arm attached (measured;
-3.6 fps before that change). Against a simulated arm (`yolo_dryrun.py`) the
-same loop reaches ~8 fps on the CPU model and ~18 fps on the stock DRP-AI model.
+**Loop rate.** With the arm attached the control loop runs at about **6 fps on
+the bundled CPU model** and **9 fps (up to 13) on the stock DRP-AI model**
+(measured). Three things got it there from the 3.5 fps of the first port:
+
+- all six servo positions are read in one batched request instead of six
+  (the arm's controller answers one request per ~20 ms tick, so six single
+  reads cost ~115 ms; a batched one usually ~15-30 ms, with an occasional
+  200 ms stall that accounts for the spread in the DRP-AI figure);
+- that read runs on a helper thread while YOLO runs;
+- the HDMI screen is drawn on its own thread.
+
+Against a simulated arm (`yolo_dryrun.py`) the loop reaches ~8 fps on the CPU
+model and ~18 fps on the stock DRP-AI model.
 
 To force a specific model: `YOLO_MODEL=/home/weston/R01_object_detection/exe_v2h/yolov3_onnx ./start.sh`.
 
@@ -458,9 +465,9 @@ attention on a new build:
 
 > [!NOTE]
 > Several of these are counted in **frames**, and the defaults were tuned on
-> the Tria at ~14 fps. This board runs the loop at ~5 fps with the bundled
-> CPU model, so frame-counted behaviour (grace periods, settle time) takes
-> about three times longer. Re-tune if tracking feels sluggish.
+> the Tria at ~14 fps. This board runs the loop at ~6 fps on the bundled CPU
+> model and ~9-13 fps on DRP-AI, so frame-counted behaviour (grace periods,
+> settle time) stretches on the CPU model. Re-tune if tracking feels sluggish.
 
 ---
 

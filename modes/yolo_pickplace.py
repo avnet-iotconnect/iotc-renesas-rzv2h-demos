@@ -158,12 +158,12 @@ class YoloBallFollowMode(BallFollowMode):
         cx_target = w // 2 + bf.CAM_GRIPPER_OFFSET_X
         cy_target = h // 2 + bf.CAM_GRIPPER_OFFSET_Y
 
-        # Reading the six servo positions costs ~115 ms on the RZ/V2H (USB
-        # full-speed HID through libusb) — as long as the inference itself.
-        # While tracking, do the two at the same time: the reads run on a
-        # helper thread while this thread runs YOLO. Both release the GIL,
-        # and nothing else touches the arm until the join below, so the HID
-        # stream still only ever has one user.
+        # Reading the servo positions costs ~30 ms on the RZ/V2H even as one
+        # batched request (the arm's controller answers on a ~20 ms tick) —
+        # comparable to a DRP-AI inference. While tracking, do the two at the
+        # same time: the read runs on a helper thread while this thread runs
+        # YOLO. Both release the GIL, and nothing else touches the arm until
+        # the join below, so the HID stream still only ever has one user.
         early_detect = None
         if self.hold_target is None:
             box = {}

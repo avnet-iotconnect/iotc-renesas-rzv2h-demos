@@ -6,7 +6,9 @@
 Runs INSIDE the DRP-AI TVM container (drpai/compile.sh starts it) from
 $TVM_ROOT/tutorials:
 
-    python3 compile_yolo_onnx.py <model.onnx> <calibration-image-dir> <output-dir>
+    python3 compile_yolo_onnx.py <model.onnx> <calibration-image-dir> <output-dir> [extra args]
+
+Extra arguments are passed straight to Renesas' script (e.g. --mera1).
 
 Renesas' ``compile_onnx_model_quant.py`` does the whole job (TVM frontend,
 INT8 calibration, DRP-AI Translator, cross-compile for the board), but it
@@ -61,16 +63,17 @@ def model_input_size(onnx_path):
 
 
 def main():
-    if len(sys.argv) != 4:
+    if len(sys.argv) < 4:
         sys.exit(__doc__)
-    onnx_path, calib_dir, out_dir = sys.argv[1:]
+    onnx_path, calib_dir, out_dir = sys.argv[1:4]
+    extra = sys.argv[4:]
     size = model_input_size(onnx_path)
 
     with open(SAMPLE) as f:
         src = f.read()
     if src.count(CALIB_CALL) != 1 or MAIN_GUARD not in src:
         sys.exit(f"{SAMPLE} doesn't look like the DRP-AI TVM sample this "
-                 "wrapper was written against (v2.5.x) — check the calibration "
+                 "wrapper was written against (v2.5 - v2.8) — check the calibration "
                  "preprocessing in it by hand")
     src = src.replace(CALIB_CALL, f"input_data = _yolo_preprocess(image, {size})")
     src = src.replace(MAIN_GUARD, YOLO_PREPROCESS + MAIN_GUARD, 1)
@@ -83,8 +86,7 @@ def main():
            "-d", os.environ["TRANSLATOR"],
            "-c", os.environ["QUANTIZER"],
            "-s", f"1,3,{size},{size}",
-           "--images", calib_dir,
-           "-v", "100"]
+           "--images", calib_dir] + extra
     print("+", " ".join(cmd), flush=True)
     sys.exit(subprocess.call(cmd))
 

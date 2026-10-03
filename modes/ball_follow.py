@@ -142,14 +142,19 @@ _ALL_SERVOS = [Servo(i) for i in range(1, 7)]
 
 
 def _read_all_positions(arm):
-    """Per-servo reads of all six positions. Returns {id: pos}.
+    """All six servo positions. Returns {id: pos}.
 
-    We do NOT use the batched ``arm.getPosition([Servo...])`` call: when its
-    response parse throws IndexError it leaves leftover bytes in the HID read
-    buffer, permanently desynchronising the stream. Every subsequent read
-    then mis-parses and the process must be restarted with a USB power-cycle.
-    Per-servo reads cost ~6 USB RTTs (~40 ms) but don't poison the stream.
+    Uses the arm wrapper's batched read when it has one (main.ShadowArm
+    .getPositions — one request, with a flush-and-fall-back if it fails).
+    The raw ``arm.getPosition([Servo...])`` call of the xarm library must
+    NOT be used directly: when its reply misses the library's 50 ms timeout
+    the parse throws IndexError and the late reply stays in the HID read
+    queue, desynchronising every later read until the process restarts.
+    Arms without the wrapper get per-servo reads (~20 ms each).
     """
+    batched = getattr(arm, "getPositions", None)
+    if batched is not None:
+        return batched()
     return {sid: int(arm.getPosition(sid)) for sid in range(1, 7)}
 
 

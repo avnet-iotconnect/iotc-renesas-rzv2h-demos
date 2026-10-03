@@ -7,19 +7,22 @@ the full-screen window — video on the left, and on the right what a visitor
 wants to know at a glance: where inference is running and how fast, what the
 arm is doing, and how many balls it has moved.
 
-Rendered at 1280x720 and left for the window to scale: drawing straight at
-1080p costs the Cortex-A55 enough per frame to slow the control loop. For the
-same reason the panel is only redrawn when the state changes or a few times
-a second — its anti-aliased text costs ~30 ms, the video scaling ~6 ms.
+Rendered at the monitor's native 1920x1080. That is the cheap option on this
+board, not the expensive one: the window toolkit scales anything smaller in
+software, and showing a 1280x720 picture full screen costs 27 ms against 10 ms
+for a native one. The panel is only redrawn when the state changes or a few
+times a second — its anti-aliased text is the costly part of the picture.
 """
 
+import threading
 import time
 
 import cv2
 import numpy as np
 
-W, H = 1280, 720
-VIDEO_W = 960            # 4:3 video at full height
+W, H = 1920, 1080
+VIDEO_W = 1440           # 4:3 video at full height
+K = H / 720.0            # layout below is written for a 720-line picture
 PANEL_X = VIDEO_W
 PANEL_W = W - VIDEO_W
 
@@ -36,18 +39,24 @@ _FONT = cv2.FONT_HERSHEY_SIMPLEX
 _BOLD = cv2.FONT_HERSHEY_DUPLEX
 
 
+def _px(v):
+    return int(round(v * K))
+
+
 def _text(img, s, x, y, scale=0.6, color=WHITE, font=_FONT, thick=1):
-    cv2.putText(img, str(s), (x, y), font, scale, color, thick, cv2.LINE_AA)
+    """x is an offset into the panel, y a line position — both in 720-line units."""
+    cv2.putText(img, str(s), (PANEL_X + _px(x), _px(y)), font, scale * K, color,
+                max(1, int(round(thick * K))), cv2.LINE_AA)
 
 
 def _label_value(img, label, value, y, color=WHITE, scale=0.95):
-    _text(img, label, PANEL_X + 22, y, 0.5, GREY)
-    _text(img, value, PANEL_X + 22, y + 34, scale, color, _BOLD)
+    _text(img, label, 22, y, 0.5, GREY)
+    _text(img, value, 22, y + 34, scale, color, _BOLD)
     return y + 66
 
 
 def _rule(img, y):
-    cv2.line(img, (PANEL_X + 22, y), (W - 22, y), RULE, 1)
+    cv2.line(img, (PANEL_X + _px(22), _px(y)), (W - _px(22), _px(y)), RULE, 1)
     return y + 26
 
 
@@ -81,12 +90,12 @@ def compose(frame, info):
 def _draw_panel(info):
     canvas = np.full((H, W, 3), BG, dtype=np.uint8)
 
-    _text(canvas, "Renesas RZ/V2H", PANEL_X + 22, 46, 0.85, WHITE, _BOLD)
-    _text(canvas, "AI pick-and-place", PANEL_X + 22, 76, 0.6, GREY)
+    _text(canvas, "Renesas RZ/V2H", 22, 46, 0.85, WHITE, _BOLD)
+    _text(canvas, "AI pick-and-place", 22, 76, 0.6, GREY)
     cloud = info.get("cloud")
-    _text(canvas, "/IOTCONNECT", PANEL_X + 22, 106, 0.6, BLUE, _BOLD)
+    _text(canvas, "/IOTCONNECT", 22, 106, 0.6, BLUE, _BOLD)
     if cloud is not None:
-        _text(canvas, "connected" if cloud else "offline", PANEL_X + 172, 106, 0.5,
+        _text(canvas, "connected" if cloud else "offline", 172, 106, 0.5,
               GREEN if cloud else RED)
     y = _rule(canvas, 126)
 
@@ -115,3 +124,59 @@ def _draw_panel(info):
     if st.get("last_cycle_s"):
         _label_value(canvas, "LAST CYCLE", f"{st['last_cycle_s']:.0f} s", y, WHITE, 0.75)
     return canvas
+
+
+class Screen:
+    """The full-screen HDMI window, drawn on its own thread.
+
+    Composing and showing the picture costs ~40 ms on the Cortex-A55 — more
+    than a DRP-AI inference — so doing it inline would cap the control loop
+    well below what the accelerator allows. The loop just hands over its
+    latest frame; this thread draws whatever is newest and drops the rest.
+    All window calls stay on this one thread, as the GUI toolkit requires.
+    """
+
+    def __init__(self, title):
+        self._title = title
+        self._latest = None
+        self._lock = threading.Lock()
+        self._new = threading.Event()
+        self._stop = threading.Event()
+        self.quit_requested = False      # ESC or 'q' pressed in the window
+        self._thread = threading.Thread(target=self._run, name="hdmi-screen", daemon=True)
+        self._thread.start()
+
+    def show(self, frame, info):
+        """Queue a frame (not copied — the caller must not draw on it again)."""
+        with self._lock:
+            self._latest = (frame, info)
+        self._new.set()
+
+    def _run(self):
+        try:
+            cv2.namedWindow(self._title, cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty(self._title, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            while not self._stop.is_set():
+                if not self._new.wait(timeout=0.2):
+                    cv2.waitKey(1)       # keep the window responsive while idle
+                    continue
+                self._new.clear()
+                with self._lock:
+                    frame, info = self._latest
+                cv2.imshow(self._title, compose(frame, info))
+                key = cv2.waitKey(1)
+                if key in (27, 113):
+                    self.quit_requested = True
+        except Exception as e:
+            print(f"[hud] HDMI screen stopped: {e}")
+        finally:
+            try:
+                cv2.destroyWindow(self._title)
+                cv2.waitKey(1)
+            except Exception:
+                pass
+
+    def close(self):
+        self._stop.set()
+        self._new.set()
+        self._thread.join(timeout=2.0)

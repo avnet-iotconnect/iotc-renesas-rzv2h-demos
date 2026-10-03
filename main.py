@@ -1140,6 +1140,43 @@ class ShadowArm:
                 self._reads_were_dead = True
             return self._shadow.get(int(sid), 500)
 
+    def getPositions(self):
+        """All six positions in ONE request. Returns {servo_id: position}.
+
+        The controller answers a request roughly every 20 ms however much
+        was asked, so six single reads cost ~130 ms on the RZ/V2H and one
+        batched read ~32 ms. The stock library cannot do this — the reply
+        takes longer than its 50 ms read timeout, the parse then raises and
+        the late reply is left in the HID queue, where it is mistaken for
+        the answer to the next request. With the longer timeout patched in
+        above the reply arrives in time; if a batched read fails anyway, the
+        queue is flushed before falling back to single reads, so a stale
+        reply can't desynchronise the stream."""
+        servos = [xarm.Servo(i) for i in range(1, 7)]
+        try:
+            self._real.getPosition(servos)
+            pos = {s.servo_id: int(s.position) for s in servos}
+            if len(pos) != 6:
+                raise ValueError(f"batched read returned {len(pos)} servos")
+        except Exception as e:
+            self._batch_failures = getattr(self, "_batch_failures", 0) + 1
+            if self._batch_failures in (1, 10, 100) or self._batch_failures % 1000 == 0:
+                print(f"[shadow] batched position read failed ({type(e).__name__}: {e}); "
+                      f"flushing and reading servos one by one (failure #{self._batch_failures})")
+            self._flush_input()
+            return {sid: int(self.getPosition(sid)) for sid in range(1, 7)}
+        self._shadow.update(pos)
+        return pos
+
+    def _flush_input(self):
+        """Drop any replies still queued on the HID device."""
+        try:
+            for _ in range(16):
+                if not self._real._device.read(64, 20):
+                    break
+        except Exception:
+            pass
+
     def servoOff(self):
         return self._real.servoOff()
 
@@ -1479,12 +1516,9 @@ def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
     t_total_sum = 0.0
     t_window_start = time.time()
 
-    if not headless:
-        # Show the preview fullscreen on the board's HDMI output instead of a
-        # small default-size window in a corner.
-        cv2.namedWindow(window_title, cv2.WINDOW_NORMAL)
-        cv2.setWindowProperty(window_title, cv2.WND_PROP_FULLSCREEN,
-                              cv2.WINDOW_FULLSCREEN)
+    # Full-screen status display on the board's HDMI output, drawn on its
+    # own thread so it doesn't slow the control loop.
+    screen = hud.Screen(window_title) if not headless else None
 
     try:
         mode.setup(arm)
@@ -1509,10 +1543,9 @@ def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
             if display is None:
                 display = frame
 
-            if not headless:
-                cv2.imshow(window_title, hud.compose(display, _hud_info(mode, hud_fps)))
-                key = cv2.waitKey(1)
-                if key == 27 or key == 113:
+            if screen is not None:
+                screen.show(display, _hud_info(mode, hud_fps))
+                if screen.quit_requested:
                     break
 
             if web is not None:
@@ -1554,8 +1587,8 @@ def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
         except Exception as e:
             print(f"[run_mode] teardown failed: {e}")
         cam.release()
-        if not headless:
-            cv2.destroyAllWindows()
+        if screen is not None:
+            screen.close()
         if web is not None:
             web.stop()
         _current_mode = None
