@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 
 from detectors.yolo_detector import YoloDetector, make_ball_detector
-from detectors.depth_detector import DepthDetector
+from detectors.depth_detector import DepthDetector, default_depth_model
 
 
 def grab(url, timeout=8):
@@ -40,18 +40,25 @@ def grab(url, timeout=8):
     return None
 
 
+def _open_depth(path):
+    if not path:
+        raise SystemExit("no depth model installed — put a DRP-AI TVM model in "
+                         "model/midas_drpai/ or a TFLite model at model/midas.tflite "
+                         "(see README: depth is optional on the RZ/V2H)")
+    return DepthDetector(path)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://127.0.0.1:8080/stream")
-    ap.add_argument("--ball-model", default="model/ball_best.tflite")
-    ap.add_argument("--depth-model", default="/etc/models/midas_quantized.tflite")
+    ap.add_argument("--ball-model", default=None,
+                    help="default: best installed model")
+    ap.add_argument("--depth-model", default=default_depth_model())
     ap.add_argument("--frames", type=int, default=30)
-    ap.add_argument("--cpu", action="store_true")
     args = ap.parse_args()
 
-    ball_det = make_ball_detector(model_name=args.ball_model, conf_thres=0.5,
-                                  use_npu=not args.cpu)
-    depth_det = DepthDetector(args.depth_model, use_npu=not args.cpu)
+    ball_det = make_ball_detector(model_name=args.ball_model, conf_thres=0.5)
+    depth_det = _open_depth(args.depth_model)
 
     fixed_center, fixed_ball, dyn_ball = [], [], []
     ball_centers, ball_radii = [], []

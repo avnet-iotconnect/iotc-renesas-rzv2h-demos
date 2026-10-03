@@ -22,7 +22,10 @@ After running this, you must:
 """
 import re, sys
 
-PATH = "/root/iotc-tria-vision-ai-kit-robotic-arm/modes/ball_follow.py"
+import os
+
+PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                    "modes", "ball_follow.py")
 
 with open(PATH) as f:
     src = f.read()

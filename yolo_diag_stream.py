@@ -2,23 +2,24 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Avnet
 """Diagnostic: grab one frame from the running app's MJPEG web view and run
-the detector over ALL classes at a low threshold. Lets us see what the NPU
-model actually outputs for the live scene WITHOUT touching the camera (the
-running demo still owns /dev/video2).
+the detector over ALL classes at a low threshold. Lets us see what a model
+actually outputs for the live scene WITHOUT touching the camera (the running
+demo still owns it).
+
+The default model is the CPU TFLite one: the DRP-AI is a single accelerator,
+so don't point --model at a DRP-AI model while the demo is using it.
 
     python3 yolo_diag_stream.py --url http://127.0.0.1:8080/stream --conf 0.02
 """
 
 import argparse
-import json
 import urllib.request
 
 import cv2
 import numpy as np
 
-from detectors.yolo_detector import YoloDetector
-
-LABELS = "/etc/labels/yolox.json"
+from detectors.yolo_detector import YoloDetector, CUSTOM_TFLITE_MODEL
+from yolo_selftest import load_labels
 
 
 def grab_frame(url, timeout=8):
@@ -41,13 +42,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://127.0.0.1:8080/stream")
     ap.add_argument("--conf", type=float, default=0.02)
+    ap.add_argument("--model", default=CUSTOM_TFLITE_MODEL)
     ap.add_argument("--box-order", default="xyxy", choices=["xyxy", "xywh"])
     args = ap.parse_args()
-
-    try:
-        labels = {e["id"]: e["label"] for e in json.load(open(LABELS))}
-    except Exception:
-        labels = {}
 
     frame = grab_frame(args.url)
     if frame is None:
@@ -55,8 +52,9 @@ def main():
                          "(is the app running with --web-port?)")
     print(f"frame {frame.shape}")
 
-    det = YoloDetector("/etc/models/yolox_quantized.tflite", class_ids=None,
-                       conf_thres=args.conf, use_npu=True, box_order=args.box_order)
+    det = YoloDetector(args.model, class_ids=None,
+                       conf_thres=args.conf, box_order=args.box_order)
+    labels = load_labels(det)
     dets = sorted(det.detect(frame), key=lambda d: d.conf, reverse=True)
     print(f"{len(dets)} detections @ conf>={args.conf}")
     for d in dets[:20]:

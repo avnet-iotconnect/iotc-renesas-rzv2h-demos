@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Avnet
-"""Teach D_grab — the relative-depth value at the ball's centre when the arm
-is in a known grab pose. Run this once, then the runtime depth-gated grab
-uses the saved value (``grab_depth.json``) to decide when to close the gripper.
+"""Teach the grab reference — the ball's apparent radius (and, when a depth
+model is installed, the relative-depth value D_grab at the ball's centre) with
+the arm in a known grab pose. Run this once, then the runtime grab gate uses
+the saved values (``grab_depth.json``) to decide when to close the gripper.
 
 Workflow:
-  1. Stop the running demo so /dev/video2 is free.
-  2. Run ``./teach_grab.sh --model model/ball_best.tflite --web-port 8080``.
+  1. Stop the running demo so the camera and the DRP-AI are free.
+  2. Run ``./teach_grab.sh --web-port 8080``.
   3. SUPPORT THE ARM by hand, press Enter to release torque.
   4. Hand-pose the arm so the gripper is in the grab position, with a ball
      clearly visible to the wrist camera (slightly higher than touchdown so
@@ -35,7 +36,7 @@ import xarm
 from xarm import Servo
 
 import main as app  # _FreshCamera applies camera_settings.json
-from detectors import make_ball_detector, DepthDetector
+from detectors import make_ball_detector, DepthDetector, default_depth_model
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT_FILE = os.path.join(HERE, "grab_depth.json")
@@ -60,22 +61,21 @@ def release_torque(arm):
 def parse_args():
     ap = argparse.ArgumentParser(description="Teach D_grab for depth-gated grab")
     ap.add_argument("--camera", type=int, default=None,
-                    help="OpenCV camera index. Default: auto-detect the Brio.")
-    # Default model auto-detects: custom-trained model/ball_best.tflite if it
-    # exists, else fall back to the stock YOLO-X. Mirrors make_mode in
-    # modes/__init__.py so the cloud-triggered teach uses whatever the live
-    # demo would use.
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _custom = os.path.join(_here, "model", "ball_best.tflite")
-    ap.add_argument("--model",
-                    default=_custom if os.path.exists(_custom)
-                    else "/etc/models/yolox_quantized.tflite",
-                    help="YOLO model used to find the ball during teach")
+                    help="OpenCV camera index. Default: auto-detect the USB camera.")
+    # Default model = whatever the live demo would use (make_mode in
+    # modes/__init__.py honours the same env vars), so the cloud-triggered
+    # teach measures the ball with the same detector that will grab it.
+    ap.add_argument("--model", default=os.environ.get("YOLO_MODEL"),
+                    help="YOLO model used to find the ball during teach: DRP-AI TVM "
+                         "model directory or .tflite (default: best installed model)")
     ap.add_argument("--conf", type=float, default=None,
-                    help="confidence threshold (auto: 0.25 yolox, else $YOLO_CONF or 0.30 to match pickplace)")
-    ap.add_argument("--depth-model", default="/etc/models/midas_quantized.tflite")
+                    help="confidence threshold (default: $YOLO_CONF, else the model's default)")
+    ap.add_argument("--depth-model", default=os.environ.get("DEPTH_MODEL"),
+                    help="depth model (default: model/midas_drpai/ or model/midas.tflite; "
+                         "none installed = teach the ball radius only)")
     ap.add_argument("--cpu", action="store_true",
-                    help="force CPU TFLite for both detectors (skip Hexagon HTP)")
+                    default=bool(os.environ.get("YOLO_CPU")),
+                    help="skip DRP-AI models; run .tflite models on the CPU")
     ap.add_argument("--frames", type=int, default=20,
                     help="frames to median over for the D_grab snapshot")
     ap.add_argument("--web-port", type=int, default=0,
@@ -91,10 +91,10 @@ def main():
     args = parse_args()
     if args.camera is None:
         import camera_settings as cam_settings
-        args.camera = cam_settings.find_brio_index(fallback=2)
+        args.camera = cam_settings.find_camera_index(fallback=0)
         print(f"[teach-grab] --camera not specified -> auto-detected /dev/video{args.camera}")
-    if args.conf is None:
-        args.conf = 0.25 if "yolox" in os.path.basename(args.model).lower() else float(os.environ.get("YOLO_CONF", 0.30))
+    if args.conf is None and os.environ.get("YOLO_CONF"):
+        args.conf = float(os.environ["YOLO_CONF"])
 
     print("[teach-grab] connecting to arm...")
     arm = xarm.Controller("USB")
@@ -112,8 +112,12 @@ def main():
 
     print("[teach-grab] loading detectors (this takes a few seconds)...")
     ball_det = make_ball_detector(model_name=args.model, conf_thres=args.conf,
-                                  use_npu=not args.cpu)
-    depth_det = DepthDetector(args.depth_model, use_npu=not args.cpu)
+                                  use_drpai=not args.cpu)
+    depth_model = args.depth_model or default_depth_model(use_drpai=not args.cpu)
+    depth_det = DepthDetector(depth_model) if depth_model else None
+    if depth_det is None:
+        print("[teach-grab] no depth model installed — teaching the ball radius only "
+              "(the grab gate runs on radius)")
 
     print(f"[teach-grab] opening camera index {args.camera}...")
     cam = app._FreshCamera(args.camera, 640, 480)
@@ -146,7 +150,7 @@ def main():
             ball = max(dets, key=lambda d: d.r) if dets else None
             state["last_ball"] = ball
             D = None
-            if ball is not None:
+            if ball is not None and depth_det is not None:
                 dm = depth_det.infer(f)
                 D = depth_det.at(dm, ball.cx, ball.cy, patch_r=max(5, int(ball.r / 3)))
             state["last_D"] = D
@@ -154,7 +158,7 @@ def main():
             disp = cv2.flip(f, 1)
             if ball is not None:
                 cv2.circle(disp, (640 - ball.cx, ball.cy), int(ball.r), (0, 255, 0), 2)
-                cv2.putText(disp, f"D={D:.1f}" if D is not None else "D=?",
+                cv2.putText(disp, f"D={D:.1f}" if D is not None else "D=n/a",
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
                             (0, 255, 0), 2, cv2.LINE_AA)
                 cv2.putText(disp, f"r={ball.r:.0f}  conf={ball.conf:.2f}",
@@ -173,8 +177,9 @@ def main():
 
             now = time.time()
             if now - last_print >= 1.0:
-                if ball is not None and D is not None:
-                    print(f"[teach-grab] ball r={ball.r:.0f} conf={ball.conf:.2f} D={D:.1f}")
+                if ball is not None:
+                    d_str = f"{D:.1f}" if D is not None else "n/a"
+                    print(f"[teach-grab] ball r={ball.r:.0f} conf={ball.conf:.2f} D={d_str}")
                 else:
                     print("[teach-grab] no ball detected")
                 last_print = now
@@ -204,15 +209,15 @@ def main():
         d_vals, r_vals = [], []
         for _ in range(args.frames):
             ball, D = state["last_ball"], state["last_D"]
-            if ball is not None and D is not None:
-                d_vals.append(D); r_vals.append(ball.r)
+            if ball is not None and (D is not None or depth_det is None):
+                d_vals.append(D if D is not None else 0.0); r_vals.append(ball.r)
             time.sleep(0.1)
         if len(d_vals) < args.frames * 0.5:
             return False, f"only {len(d_vals)}/{args.frames} valid frames"
         D_grab = statistics.median(d_vals)
         r_grab = statistics.median(r_vals)
         stdev_d = statistics.stdev(d_vals) if len(d_vals) > 1 else 0.0
-        if stdev_d < 0.5:
+        if depth_det is not None and stdev_d < 0.5:
             return False, ("D stdev ~0 across all frames - torque was ON during "
                            "snap. Release torque, hand-pose, snap again BEFORE hold.")
         payload = {
@@ -222,13 +227,16 @@ def main():
             "D_stdev": float(stdev_d),
             "ball_r_at_grab": float(r_grab),
             "n_frames": len(d_vals),
-            "model": os.path.basename(args.model),
-            "depth_model": os.path.basename(args.depth_model),
+            "model": os.path.basename(os.path.normpath(ball_det.model_path)),
+            "depth_model": (os.path.basename(os.path.normpath(depth_model))
+                            if depth_model else None),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         with open(OUT_FILE, "w") as f:
             json.dump(payload, f, indent=2)
-        return True, (f"D_grab={D_grab:.1f} (n={len(d_vals)}, "
+        if depth_det is None:
+            return True, f"ball_r_at_grab={r_grab:.0f}px (n={len(r_vals)}, no depth model)"
+        return True, (f"D_grab={D_grab:.1f} ball_r_at_grab={r_grab:.0f}px (n={len(d_vals)}, "
                       f"stdev={stdev_d:.1f}, range {min(d_vals):.1f}..{max(d_vals):.1f})")
 
     # ---------- Web-driven path (cloud-triggered) ----------

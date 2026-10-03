@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Avnet
-"""Standalone YOLO pick-and-place app (NPU-accelerated ball detection).
+"""Standalone YOLO pick-and-place app (DRP-AI-accelerated ball detection).
 
 Separate entry point from main.py — it does not register a mode, touch
-make_mode, or run the IoTConnect command pump, so the existing asl / ball /
-pickplace demos are completely unaffected. It reuses main.py's camera worker
-(_FreshCamera) and arm wrapper (ShadowArm) read-only.
+make_mode, or run the IoTConnect command pump, so it is the quickest way to
+try a model or a threshold with no cloud in the loop. It reuses main.py's
+camera worker (_FreshCamera) and arm wrapper (ShadowArm) read-only.
 
-Runs the ball detector on the QCS6490 Hexagon NPU via TFLite + the QNN HTP
-delegate, reusing the board's existing COCO model
-(/etc/models/yolox_quantized.tflite). COCO class 32 ('sports ball') is the
-pickup target, so no training and no model download are required.
+The ball detector runs on the RZ/V2H DRP-AI accelerator when the model is a
+DRP-AI TVM model directory, and on the Cortex-A55 cores when it is a .tflite
+file. With no --model the best installed model is used (custom DRP-AI model,
+then the custom TFLite model, then the RZ/V AI SDK's stock COCO YOLOv3 where
+class 32 'sports ball' is the pickup target).
 
-    ./start_yolo.sh                           # recommended (sets ADSP env)
+    ./start_yolo.sh                           # same as the next line, unbuffered
     python3 yolo_pickplace.py                 # YOLO pick-place, box stays HSV
     python3 yolo_pickplace.py --mode ball     # just the YOLO ball-follow grab
     python3 yolo_pickplace.py --headless --web-port 8080
-    python3 yolo_pickplace.py --cpu           # force CPU TFLite (no NPU)
+    python3 yolo_pickplace.py --cpu           # skip DRP-AI models
 """
 
 import argparse
@@ -29,7 +30,7 @@ import cv2
 import main as app            # reuse _FreshCamera + ShadowArm (read-only)
 import xarm
 
-from detectors import make_ball_detector, DepthDetector
+from detectors import make_ball_detector, DepthDetector, default_depth_model
 from modes.yolo_pickplace import YoloPickPlaceMode, YoloBallFollowMode
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -44,28 +45,31 @@ def build_mode(name, detector, depth_detector=None):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="YOLO (NPU) pick-and-place demo")
+    p = argparse.ArgumentParser(description="YOLO (DRP-AI) pick-and-place demo")
     p.add_argument("--mode", default="pickplace", choices=["pickplace", "ball"],
                    help="pickplace (find box, grab ball, drop) or ball (grab only)")
     p.add_argument("--camera", type=int, default=None,
-                   help="OpenCV camera index. Default: auto-detect the Brio "
-                        "via /sys/class/video4linux/*/name, falling back to 2.")
-    p.add_argument("--model", default="/etc/models/yolox_quantized.tflite",
-                   help="path to the w8a8 TFLite model (default: board's YOLO-X)")
+                   help="OpenCV camera index. Default: auto-detect the USB camera "
+                        "via /sys/class/video4linux, falling back to 0.")
+    p.add_argument("--model", default=None,
+                   help="DRP-AI TVM model directory or .tflite file "
+                        "(default: best installed model)")
     p.add_argument("--conf", type=float, default=None,
                    help="detection confidence threshold "
-                        "(default: 0.25 for stock YOLO-X, 0.7 for custom YOLOv8 models)")
+                        "(default: 0.25 for the stock COCO model, 0.5 for a custom ball model)")
     p.add_argument("--box-order", default="xyxy", choices=["xyxy", "xywh"],
                    help="layout of the model's 4 box values")
     p.add_argument("--cpu", action="store_true",
-                   help="force CPU TFLite (skip the Hexagon QNN delegate)")
+                   help="skip DRP-AI models; run the .tflite model on the CPU")
     p.add_argument("--headless", action="store_true", help="no preview window")
     p.add_argument("--web-port", type=int, default=None,
                    help="serve annotated MJPEG on this port")
     p.add_argument("--depth", action="store_true",
-                   help="also run MiDaS depth on the NPU and overlay D=value at the ball")
-    p.add_argument("--depth-model", default="/etc/models/midas_quantized.tflite",
-                   help="path to the depth tflite model")
+                   help="also run MiDaS depth and overlay D=value at the ball "
+                        "(needs a depth model installed — see README)")
+    p.add_argument("--depth-model", default=None,
+                   help="depth model: DRP-AI TVM model directory or .tflite file "
+                        "(default: model/midas_drpai/ or model/midas.tflite)")
     return p.parse_args()
 
 
@@ -74,22 +78,20 @@ def main():
 
     if args.camera is None:
         import camera_settings as cam_settings
-        args.camera = cam_settings.find_brio_index(fallback=2)
+        args.camera = cam_settings.find_camera_index(fallback=0)
         print(f"[yolo] --camera not specified -> auto-detected /dev/video{args.camera}")
-
-    if args.conf is None:
-        # Stock YOLO-X (COCO sports-ball among 80 classes) needs a low threshold
-        # to catch real detections; a custom 1-class model has much higher real
-        # confidences, so a higher threshold cleanly rejects bright-corner FPs.
-        args.conf = 0.25 if "yolox" in os.path.basename(args.model).lower() else 0.7
 
     detector = make_ball_detector(
         model_name=args.model, conf_thres=args.conf,
-        use_npu=not args.cpu, box_order=args.box_order)
+        use_drpai=not args.cpu, box_order=args.box_order)
 
     depth_detector = None
     if args.depth:
-        depth_detector = DepthDetector(args.depth_model, use_npu=not args.cpu)
+        depth_model = args.depth_model or default_depth_model(use_drpai=not args.cpu)
+        if depth_model is None:
+            raise SystemExit("[yolo] --depth needs a depth model: install "
+                             "model/midas_drpai/ or model/midas.tflite (see README)")
+        depth_detector = DepthDetector(depth_model)
 
     try:
         arm = app.ShadowArm(xarm.Controller("USB"))
@@ -156,6 +158,7 @@ def main():
         except Exception as e:
             print(f"[yolo] teardown failed: {e}")
         cam.release()
+        mode.close()
         if not args.headless:
             cv2.destroyAllWindows()
 

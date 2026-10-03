@@ -1,5 +1,7 @@
-# Shell scripts and systemd units run on the Linux board — force LF so a
-# commit from a Windows checkout can't introduce CRLF that breaks bash or
-# systemd on the device.
-*.sh      text eol=lf
-*.service text eol=lf
+# Everything here ends up on the Linux board (deploy/push_to_board.sh copies
+# the working tree), so keep LF everywhere — a Windows checkout must not turn
+# shell scripts, systemd units or `#!` lines into CRLF.
+* text=auto eol=lf
+*.png    binary
+*.jpg    binary
+*.tflite binary

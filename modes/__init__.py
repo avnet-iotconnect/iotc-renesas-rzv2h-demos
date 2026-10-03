@@ -7,18 +7,18 @@ decisions. ``make_mode(name)`` is the single entry point used by main.py's
 supervisor and by the IOTCONNECT ``set_mode`` remote command.
 
 Modes:
-  asl              ASL gesture control (MediaPipe + PointNet, CPU)
   ball             HSV ball-follow (classical CV, CPU)
   pickplace        HSV pick-and-place (classical CV, CPU)
-  yolo-ball        Custom YOLOv8n ball-follow on Hexagon NPU + depth gate
-  yolo-pickplace   Custom YOLOv8n pick-and-place on Hexagon NPU + depth gate
+  yolo-ball        YOLO ball-follow on DRP-AI (CPU fallback)
+  yolo-pickplace   YOLO pick-and-place on DRP-AI (CPU fallback)
 
-The YOLO modes lazy-import detectors so the legacy CPU modes don't drag in
-``ai_edge_litert`` or the QNN delegate at startup. Defaults: custom-trained
-``model/ball_best.tflite`` if present, falling back to the stock board model
-``/etc/models/yolox_quantized.tflite``. Depth is enabled when
-``/etc/models/midas_quantized.tflite`` exists; the depth-gated grab activates
-when ``grab_depth.json`` is also present (see README.md — Demo 3).
+The YOLO modes lazy-import detectors so the HSV modes don't drag in the
+DRP-AI runtime or ``ai_edge_litert`` at startup. The model is picked by
+``detectors.default_ball_model``: a custom DRP-AI model in ``model/ball_drpai/``
+if present, else the custom ``model/ball_best.tflite`` on the CPU, else the
+RZ/V AI SDK's stock COCO YOLOv3 on DRP-AI. Depth is enabled only when a depth
+model is installed (``detectors.default_depth_model``); without one the grab
+gate runs on the ball's apparent radius (see README.md).
 """
 
 import os
@@ -29,9 +29,6 @@ __all__ = ["Mode", "make_mode"]
 
 
 def make_mode(name: str) -> Mode:
-    if name == "asl":
-        from .asl import ASLMode
-        return ASLMode()
     if name == "ball":
         from .ball_follow import BallFollowMode
         return BallFollowMode()
@@ -39,32 +36,26 @@ def make_mode(name: str) -> Mode:
         from .pickplace import PickPlaceMode
         return PickPlaceMode()
     if name in ("yolo-ball", "yolo-pickplace"):
-        # Lazy import so legacy CPU modes don't touch ai_edge_litert.
-        from detectors import make_ball_detector, DepthDetector
+        # Lazy import so the HSV modes don't touch the NN runtimes.
+        from detectors import make_ball_detector, DepthDetector, default_depth_model
         from .yolo_pickplace import YoloPickPlaceMode, YoloBallFollowMode
 
-        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        custom = os.path.join(here, "model", "ball_best.tflite")
-        if os.path.exists(custom):
-            # 0.5 (was 0.7): a ball partially cut off at the frame edge scores
-            # ~0.4-0.5 while fully-visible detections sit at 0.95+, so 0.5
-            # keeps tracking sticky at the edges without admitting noise.
-            model_path, conf = custom, 0.5
-        else:
-            model_path, conf = "/etc/models/yolox_quantized.tflite", 0.25
         # main.py has no --conf/--model flags, so allow overriding the YOLO
         # defaults via env vars when launched through ./start.sh, e.g.
         #   YOLO_CONF=0.3 ./start.sh --mode yolo-pickplace
-        model_path = os.environ.get("YOLO_MODEL", model_path)
-        conf = float(os.environ.get("YOLO_CONF", conf))
-        detector = make_ball_detector(model_name=model_path,
-                                      conf_thres=conf, use_npu=True)
+        #   YOLO_CPU=1 ./start.sh ...     (skip DRP-AI models)
+        use_drpai = not os.environ.get("YOLO_CPU")
+        conf = os.environ.get("YOLO_CONF")
+        detector = make_ball_detector(
+            model_name=os.environ.get("YOLO_MODEL"),
+            conf_thres=float(conf) if conf else None,
+            use_drpai=use_drpai)
 
         depth_detector = None
-        midas = "/etc/models/midas_quantized.tflite"
-        if os.path.exists(midas):
+        depth_model = os.environ.get("DEPTH_MODEL") or default_depth_model(use_drpai)
+        if depth_model:
             try:
-                depth_detector = DepthDetector(midas, use_npu=True)
+                depth_detector = DepthDetector(depth_model)
             except Exception as e:
                 print(f"[make_mode] depth detector init failed: {e}")
 

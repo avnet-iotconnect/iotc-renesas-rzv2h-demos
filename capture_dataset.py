@@ -34,6 +34,8 @@ import main as app  # _FreshCamera (applies camera_settings.json, threaded grab)
 import xarm
 from xarm import Servo
 
+import camera_settings as cam_settings
+
 from capture_web import CaptureWebView
 
 _ALL_SERVOS = [Servo(i) for i in range(1, 7)]
@@ -57,7 +59,8 @@ class State:
 
 def main():
     ap = argparse.ArgumentParser(description="Capture ball training images")
-    ap.add_argument("--camera", type=int, default=2)
+    ap.add_argument("--camera", type=int, default=cam_settings.find_camera_index(fallback=0),
+                        help="OpenCV camera index (default: auto-detect the USB camera)")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                                    "dataset", "images"))
     ap.add_argument("--interval", type=float, default=0.5, help="seconds between saves")

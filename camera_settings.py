@@ -21,8 +21,8 @@ Common starting values (camera-specific; tune for yours):
   {
     "auto_wb":       0,
     "auto_exposure": 1,    # 1 = manual on most V4L2 backends, 3 = auto
-    "exposure":      -6,   # range varies; -7 is dark, 0 is bright (Brio/eMeet)
-    "saturation":    140
+    "exposure":      70,   # units are camera-specific (Innomaker: 0.1 ms steps)
+    "saturation":    95
   }
 """
 
@@ -51,6 +51,24 @@ SETTING_PROPS = {
     'gamma':          (cv2.CAP_PROP_GAMMA, float),
     'hue':            (cv2.CAP_PROP_HUE, float),
 }
+
+
+def open_capture(index, width=640, height=480, fps=30):
+    """Open a camera the way every tool in this repo should on the RZ/V2H.
+
+    The image's OpenCV picks its GStreamer backend by default, and that
+    backend can't drive the camera: exposure can't be set at all and
+    saturation goes through a colour-balance shim that rescales the value.
+    The native V4L2 backend maps every setting in SETTING_PROPS straight onto
+    the UVC control, so ask for it explicitly. It needs the frame rate
+    requested too — left alone it negotiates ~15 fps instead of 30."""
+    cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(index)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    cap.set(cv2.CAP_PROP_FPS, fps)
+    return cap
 
 
 def load(path=DEFAULT_PATH):
@@ -236,21 +254,19 @@ def clear_dirty():
     _dirty = False
 
 
-def find_brio_index(fallback=2):
-    """Return the /dev/videoN index of the Brio's capture node.
+def find_camera_index(fallback=0):
+    """Return the /dev/videoN index of the wrist USB camera's capture node.
 
-    The Brio's V4L2 enumeration drifts across USB events (we've seen it on
-    /dev/video2 and /dev/video3 in the same week), so hard-coding --camera
+    V4L2 enumeration drifts across USB events, so hard-coding --camera
     eventually breaks. The Linux kernel labels each /dev/videoN with the
-    camera's model string at ``/sys/class/video4linux/videoN/name``; the
-    Brio prints "Brio 100" (or similar) there. We pick the lowest matching
-    index — when the Brio enumerates as a pair, the lower-numbered node is
-    the capture node (full V4L2 controls); the sibling is a metadata node
-    that ignores cap.set().
+    camera's model string at ``/sys/class/video4linux/videoN/name`` and links
+    it to its USB device. We pick the lowest matching index — a UVC camera
+    enumerates as a node pair; the lower-numbered node is the capture node
+    (full V4L2 controls), the sibling is a metadata node that ignores
+    cap.set().
 
-    Returns ``fallback`` if no Brio node is found, so behaviour on a
-    non-Brio rig (or boot without the camera plugged in) is the same as
-    before this helper existed."""
+    Returns ``fallback`` if no USB camera is found (e.g. boot without the
+    camera plugged in)."""
     import glob, os
     usb_nodes = []
     named_nodes = []
@@ -260,10 +276,8 @@ def find_brio_index(fallback=2):
         except ValueError:
             continue
         # A USB webcam's `device` symlink resolves under a .../usb.../ path,
-        # while the Qualcomm platform/codec nodes (video0/1/32/33) do not.
-        # This finds ANY USB camera (Brio, Innomaker U20CAM, eMeet, ...), not
-        # just the Brio. A UVC camera enumerates as a node pair; the lower
-        # index is the capture node, the sibling is a metadata node.
+        # while SoC platform/codec nodes (MIPI CSI, ISP) do not. This finds
+        # any USB camera (Innomaker U20CAM, Brio, eMeet, ...).
         try:
             if "usb" in os.path.realpath(os.path.join(path, "device")):
                 usb_nodes.append(idx)

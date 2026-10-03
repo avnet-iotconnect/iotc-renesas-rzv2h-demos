@@ -15,7 +15,7 @@ def code(*lines):
 
 
 cells = [
-    md("# Train custom **ball** detector (YOLOv8n) for the Tria QCS6490",
+    md("# Train custom **ball** detector (YOLOv8n) for the Renesas RZ/V2H",
        "**Web Colab:** Runtime - Change runtime type - **T4 GPU**, then Runtime - Run all.",
        "",
        "**Before running:** upload **ball_dataset.zip** to your Google Drive **My Drive** (root)."),
@@ -38,7 +38,7 @@ cells = [
          '"""',
          "open('/content/dataset/data.yaml', 'w').write(yaml_text)",
          "print(yaml_text)"),
-    md("## 3. Train", "imgsz=640 matches the board model input. ~10-20 min on a T4."),
+    md("## 3. Train", "imgsz=640 matches the model input the board code expects. ~10-20 min on a T4."),
     code("from ultralytics import YOLO",
          "model = YOLO('yolov8n.pt')",
          "model.train(data='/content/dataset/data.yaml', epochs=100, imgsz=640,",
@@ -46,13 +46,21 @@ cells = [
     md("## 4. Validate"),
     code("m = model.val()",
          "print('mAP50-95:', round(float(m.box.map), 3), ' mAP50:', round(float(m.box.map50), 3))"),
-    md("## 5. Export + save to Drive", "Writes ball_best.pt (for Qualcomm AI Hub) + ball_best.onnx to My Drive."),
-    code("best = '/content/runs/detect/ball/weights/best.pt'",
+    md("## 5. Export + save to Drive",
+       "Writes to My Drive:",
+       "- **ball_best.onnx** - float ONNX, static 640x640. This is what DRP-AI TVM compiles for the DRP-AI accelerator.",
+       "- **ball_best.tflite** - full-integer INT8 TFLite. Runs on the board CPU as the fallback.",
+       "- **ball_best.pt** - the trained weights, in case you want to re-export later."),
+    code("import glob, shutil",
+         "best = '/content/runs/detect/ball/weights/best.pt'",
          "YOLO(best).export(format='onnx', imgsz=640, opset=12)",
-         "import shutil",
+         "YOLO(best).export(format='tflite', int8=True, imgsz=640, data='/content/dataset/data.yaml')",
          "shutil.copy(best, '/content/drive/MyDrive/ball_best.pt')",
          "shutil.copy('/content/runs/detect/ball/weights/best.onnx', '/content/drive/MyDrive/ball_best.onnx')",
-         "print('Saved ball_best.pt + ball_best.onnx to your Google Drive (My Drive)')"),
+         "tfl = glob.glob('/content/runs/detect/ball/weights/**/*full_integer_quant.tflite', recursive=True)",
+         "assert tfl, 'INT8 export did not produce a *_full_integer_quant.tflite'",
+         "shutil.copy(tfl[0], '/content/drive/MyDrive/ball_best.tflite')",
+         "print('Saved ball_best.onnx, ball_best.tflite and ball_best.pt to your Google Drive (My Drive)')"),
 ]
 
 nb = {"cells": cells,

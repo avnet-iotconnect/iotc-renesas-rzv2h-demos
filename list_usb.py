@@ -1,24 +1,27 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Avnet
-"""List all USB devices to find XArm VID/PID."""
-import usb.core
-import usb.util
+"""List USB devices (VID:PID, names) from sysfs — the image has no lsusb.
+The xArm shows up as 0483:5750 (Hiwonder xArm)."""
+import glob
+import os
+
+
+def _read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
 
 
 def main():
     print("USB Devices:")
-    devices = usb.core.find(find_all=True)
-    for device in devices:
-        try:
-            print(f"VID: 0x{device.idVendor:04x}, PID: 0x{device.idProduct:04x}")
-            print(f"  Manufacturer: {usb.util.get_string(device, device.iManufacturer)}")
-            print(f"  Product: {usb.util.get_string(device, device.iProduct)}")
-            print(f"  Serial: {usb.util.get_string(device, device.iSerialNumber)}")
-            print()
-        except:
-            print(f"VID: 0x{device.idVendor:04x}, PID: 0x{device.idProduct:04x}")
-            print("  (Could not read strings)")
-            print()
+    for d in sorted(glob.glob("/sys/bus/usb/devices/*")):
+        vid = _read(os.path.join(d, "idVendor"))
+        if not vid:
+            continue
+        print(f"{os.path.basename(d):8} VID: 0x{vid}, PID: 0x{_read(os.path.join(d, 'idProduct'))}"
+              f"  {_read(os.path.join(d, 'manufacturer'))} {_read(os.path.join(d, 'product'))}")
 
 
 if __name__ == "__main__":

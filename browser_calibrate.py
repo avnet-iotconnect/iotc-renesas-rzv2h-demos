@@ -78,9 +78,7 @@ def _derive_target_label(out_path):
 
 
 def camera_loop(state, camera_index, width, height, target_label, jpeg_quality=80):
-    cap = cv2.VideoCapture(camera_index)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    cap = cam_settings.open_capture(camera_index, width, height)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     # Apply persistent camera tuning from camera_settings.json so the HSV
     # samples we collect here match the image the demo will see.
@@ -441,8 +439,8 @@ def _local_ip_hint():
 
 def main():
     parser = argparse.ArgumentParser(description="Browser HSV color calibrator (ball or box)")
-    parser.add_argument("--camera", type=int, default=2,
-                        help="OpenCV camera index (default 2)")
+    parser.add_argument("--camera", type=int, default=cam_settings.find_camera_index(fallback=0),
+                        help="OpenCV camera index (default: auto-detect the USB camera)")
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--port", type=int, default=8000, help="HTTP listen port")

@@ -1,0 +1,5 @@
+# Optional: KVS WebRTC live video to the /IOTCONNECT portal (main.py --webrtc).
+#   python3 -m pip install -c constraints.txt -r requirements-webrtc.txt
+aiortc>=1.6.0
+websockets>=11.0
+boto3>=1.26.0

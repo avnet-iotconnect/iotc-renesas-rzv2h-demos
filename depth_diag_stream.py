@@ -17,7 +17,7 @@ import urllib.request
 import cv2
 import numpy as np
 
-from detectors.depth_detector import DepthDetector
+from detectors.depth_detector import DepthDetector, default_depth_model
 
 
 def grab(url, timeout=8):
@@ -34,11 +34,18 @@ def grab(url, timeout=8):
     return None
 
 
+def _open_depth(path):
+    if not path:
+        raise SystemExit("no depth model installed — put a DRP-AI TVM model in "
+                         "model/midas_drpai/ or a TFLite model at model/midas.tflite "
+                         "(see README: depth is optional on the RZ/V2H)")
+    return DepthDetector(path)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://127.0.0.1:8080/stream")
-    ap.add_argument("--model", default="/etc/models/midas_quantized.tflite")
-    ap.add_argument("--cpu", action="store_true")
+    ap.add_argument("--model", default=default_depth_model())
     ap.add_argument("--save", default="/tmp/depth_diag.jpg")
     args = ap.parse_args()
 
@@ -47,11 +54,11 @@ def main():
         raise SystemExit(f"no frame from {args.url} (is the app running with --web-port?)")
     print(f"frame {frame.shape}")
 
-    depth = DepthDetector(args.model, use_npu=not args.cpu)
+    depth = _open_depth(args.model)
     t = time.perf_counter()
     d = depth.infer(frame)
     dt = (time.perf_counter() - t) * 1000
-    print(f"depth: {dt:.1f} ms (NPU inference + resize)")
+    print(f"depth: {dt:.1f} ms (inference + resize)")
     print(f"stats: min={d.min():.1f} max={d.max():.1f} mean={d.mean():.1f} std={d.std():.1f}")
 
     h, w = d.shape

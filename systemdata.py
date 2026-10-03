@@ -59,10 +59,13 @@ class SystemData:
     memory: MemoryInfo
     storage: StorageInfo
     hostname: str
-    cpu_temp: float       # max of all cpu*-thermal zones, °C
-    gpu_temp: float       # max of gpuss*-thermal zones, °C
-    memory_temp: float    # ddr-thermal zone, °C
-    gpu_usage: float      # Adreno GPU busy %, from kgsl gpubusy
+    cpu_temp: float       # max of the cpu-thermal* zones, °C
+    # The RZ/V2H exposes no GPU/DDR temperature or GPU-load sensors. These
+    # stay in the payload (as 0) so the device template and dashboard shared
+    # with the Tria demo work unchanged.
+    gpu_temp: float
+    memory_temp: float
+    gpu_usage: float
 
 
 def format_bytes(size_in_bytes) -> str:
@@ -186,19 +189,6 @@ def _max_thermal_celsius(type_regex):
     return round(best / 1000.0, 1) if best is not None else 0.0
 
 
-def get_gpu_usage_percent():
-    """Adreno GPU busy %. /sys/class/kgsl/kgsl-3d0/gpubusy reports 'busy total' since last read."""
-    try:
-        with open('/sys/class/kgsl/kgsl-3d0/gpubusy') as f:
-            parts = f.read().strip().split()
-        busy, total = int(parts[0]), int(parts[1])
-        if total <= 0:
-            return 0.0
-        return round(min(100.0, busy * 100.0 / total), 1)
-    except (OSError, ValueError, IndexError):
-        return 0.0
-
-
 def collect_data() -> SystemData:
     cpu_percent = psutil.cpu_percent(interval=0.5)
     cpu_name, cpu_cmd, cpu_pct = get_top_cpu_process()
@@ -231,10 +221,10 @@ def collect_data() -> SystemData:
             percent=disk.percent,
         ),
         hostname=os.uname().nodename,
-        cpu_temp=_max_thermal_celsius(r'^cpu\d+-thermal$'),
-        gpu_temp=_max_thermal_celsius(r'^gpuss\d+-thermal$'),
-        memory_temp=_max_thermal_celsius(r'^ddr-thermal$'),
-        gpu_usage=get_gpu_usage_percent(),
+        cpu_temp=_max_thermal_celsius(r'^cpu-thermal\d*$'),
+        gpu_temp=0.0,
+        memory_temp=0.0,
+        gpu_usage=0.0,
     )
 
 

@@ -8,9 +8,6 @@ __pycache__/
 .vscode/
 .idea/
 
-# Per-board / personal helpers (user-specific, not the canonical bootstrap script)
-.setup_board.sh
-.tria-board-backup-*/
 
 # vim swap / undo files
 *.un~
@@ -23,9 +20,8 @@ __pycache__/
 
 # Runtime state — generated on the board, never committed:
 #   - per-board calibration values (camera, HSV, geometry)
-#   - per-deployment IoTConnect credentials
+#   - per-deployment IOTCONNECT credentials
 #   - launcher logs
-#   - on-device model weights downloaded by get_model.sh
 ball_color.json
 box_color.json
 box_pose.json
@@ -50,15 +46,21 @@ sweep-results.txt
 teach_pose.json
 tmp/
 icons/
-model/point_net_1.pth
-model/yolov8n.onnx
-model/*.onnx
 yolov8n.pt
 
 # Custom ball-model training data + artifacts (large, regenerable)
 dataset/
 runs/
 *.tflite
+*.onnx
 *.zip
 best.pt
-best.onnx
+# ...except the bundled custom ball detector (CPU fallback), which ships in the repo
+!model/ball_best.tflite
+
+# DRP-AI TVM build inputs/outputs (drpai/ — see CUSTOM_DRPAI_DETECTOR.md).
+# Renesas' installers are licensed downloads and must not be committed.
+drpai/downloads/*
+!drpai/downloads/README.md
+drpai/build/
+model/*_drpai/

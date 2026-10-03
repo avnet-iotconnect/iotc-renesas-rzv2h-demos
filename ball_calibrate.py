@@ -28,6 +28,8 @@ import cv2
 import numpy as np
 import xarm
 
+import camera_settings as cam_settings
+
 OUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ball_color.json")
 PATCH_RADIUS = 3      # 7x7 sample patch around each click
 HUE_PAD = 15          # extra hue tolerance on each side
@@ -111,7 +113,8 @@ def save_range(lower, upper, camera_index):
 def main():
     global hsv_frame
     parser = argparse.ArgumentParser(description="HSV ball-color calibrator")
-    parser.add_argument("--camera", type=int, default=2, help="OpenCV camera index (default 2)")
+    parser.add_argument("--camera", type=int, default=cam_settings.find_camera_index(fallback=0),
+                        help="OpenCV camera index (default: auto-detect the USB camera)")
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     args = parser.parse_args()
@@ -126,9 +129,7 @@ def main():
     input("[calib] Holding the arm? Press Enter to release torque... ")
     release_all(arm)
 
-    cap = cv2.VideoCapture(args.camera)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+    cap = cam_settings.open_capture(args.camera, args.width, args.height)
     if not cap.isOpened():
         print(f"ERROR: could not open camera {args.camera}", file=sys.stderr)
         hold_all(arm)

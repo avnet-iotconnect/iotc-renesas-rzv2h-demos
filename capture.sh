@@ -6,7 +6,4 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-source /root/miniforge3/etc/profile.d/conda.sh
-conda activate iotc-tria-xarm
-
-exec stdbuf -oL -eL python -u capture_dataset.py "$@"
+exec stdbuf -oL -eL python3 -u capture_dataset.py "$@"

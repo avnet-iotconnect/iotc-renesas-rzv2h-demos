@@ -23,8 +23,14 @@ class Mode:
         """Called once after the loop exits. Release any mode-owned resources."""
         return None
 
+    def close(self):
+        """Called once when the supervisor is done with this mode object.
+        Free anything that outlives teardown — the YOLO modes release the
+        DRP-AI here so a calibrator subprocess or the next mode can load it."""
+        return None
+
     def get_state(self):
         """Short label for this mode's current state. Published as top-level
         `state` in /IOTCONNECT telemetry. Override in stateful modes; static
-        modes can return a fixed label (e.g. 'ASL-Gesture')."""
+        modes can return a fixed label."""
         return self.name

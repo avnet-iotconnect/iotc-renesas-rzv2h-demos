@@ -6,7 +6,8 @@ IOTCONNECT XArm Vision Control
 
 Outer loop owns: camera, display window, IoTConnect command pump, arm bring-up.
 Per-frame inference + arm decisions live in modes/<name>.py and are selected
-with --mode. Default mode is 'asl' (the original gesture-controlled demo).
+with --mode. Default mode is 'yolo-pickplace' (YOLO ball detection on the
+RZ/V2H DRP-AI accelerator).
 """
 
 import argparse
@@ -239,9 +240,10 @@ def has_pending_action():
 
 
 # Vision modes the supervisor knows how to start. Used both by the new
-# parameterized `set_mode` command (mode=ball|pickplace|asl) and by the
-# legacy per-mode commands kept below for backward compatibility.
-VISION_MODE_NAMES = {'ball', 'pickplace', 'asl', 'yolo-ball', 'yolo-pickplace'}
+# parameterized `set_mode` command (mode=yolo-pickplace|yolo-ball|pickplace|ball)
+# and by the legacy per-mode commands kept below for backward compatibility.
+VISION_MODE_NAMES = {'ball', 'pickplace', 'yolo-ball', 'yolo-pickplace'}
+DEFAULT_MODE_NAME = 'yolo-pickplace'
 # Strings that mean "stop the running mode but stay cloud-connected" when
 # passed as the `mode` argument to set_mode. Matches both `stop_demo` and
 # `set_mode mode=idle` on the cloud side.
@@ -257,7 +259,6 @@ CALIBRATION_TARGETS = {'ball', 'box', 'offset', 'grab_depth'}
 MODE_SWITCH_COMMANDS = {
     'set_mode_ball': 'ball',
     'set_mode_pickplace': 'pickplace',
-    'set_mode_asl': 'asl',
     'set_mode_yolo_ball': 'yolo-ball',
     'set_mode_yolo_pickplace': 'yolo-pickplace',
 }
@@ -434,7 +435,7 @@ def on_video_stream(kvs_client):
             channel_arn = kvs_client.get_signaling_channel_arn()
             if not channel_arn:
                 print("No KVS signaling channel ARN available.")
-                print("Ensure the device is created with the 'robarmwebrtc' template.")
+                print("Ensure the device is created with the 'robarmV2H' template (robarmv2h-template.json).")
                 return
 
             if not WEBRTC_AVAILABLE:
@@ -971,7 +972,7 @@ def _release_arm(arm):
 
 def _reconnect_arm(retries=5, delay_s=1.5):
     """Re-open the xArm after a subprocess has exited and (we hope) released
-    the HID handle. Retries with backoff because hidraw release isn't instant.
+    the HID handle. Retries with backoff because the USB release isn't instant.
     Wraps the result in ShadowArm so the rest of the app stays insulated from
     Hiwonder's flaky HID-read path."""
     for attempt in range(1, retries + 1):
@@ -1133,7 +1134,7 @@ _telemetry_queue = queue.Queue(maxsize=1)
 _telemetry_worker_started = False
 # Tracks the currently running mode so send_telemetry can stamp every
 # payload with a top-level `state` (e.g. SCANNING/TRACKING/GRABBING/HOLDING
-# for ball mode, "ASL-Gesture" for ASL). Set by run_mode.
+# for ball mode). Set by run_mode.
 _current_mode = None
 
 
@@ -1291,9 +1292,7 @@ class _FreshCamera:
     """
 
     def __init__(self, index, frame_w, frame_h):
-        self.cap = cv2.VideoCapture(index)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, frame_w)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_h)
+        self.cap = cam_settings.open_capture(index, frame_w, frame_h)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         # Apply persistent camera tuning (exposure, white-balance, saturation,
         # …) so main.py and the calibrators all see the same image. Settings
@@ -1477,10 +1476,12 @@ def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
 
 def parse_args():
     parser = argparse.ArgumentParser(description="IOTCONNECT XArm vision demo")
-    parser.add_argument('--mode', default='asl', help="Vision mode (default: asl)")
+    parser.add_argument('--mode', default=DEFAULT_MODE_NAME,
+                        help=f"Vision mode: {', '.join(sorted(VISION_MODE_NAMES))}, or idle "
+                             f"(default: {DEFAULT_MODE_NAME})")
     parser.add_argument('--camera', type=int, default=None,
-                        help="OpenCV camera index. Default: auto-detect the Brio "
-                             "via /sys/class/video4linux/*/name, falling back to 2.")
+                        help="OpenCV camera index. Default: auto-detect the USB camera "
+                             "via /sys/class/video4linux, falling back to 0.")
     parser.add_argument('--headless', action='store_true', help="Disable preview window (for SSH/perf testing)")
     parser.add_argument('--perf-every', type=int, default=30, help="Print perf stats every N frames")
     parser.add_argument('--web-port', type=int, default=None,
@@ -1497,7 +1498,7 @@ def parse_args():
                              "edit this file at runtime; camera_preset NAME replaces it with a preset "
                              f"({cam_settings.preset_names()}).")
     parser.add_argument('--webrtc', action='store_true',
-                        help="Enable KVS WebRTC video streaming (requires robarmwebrtc device template)")
+                        help="Enable KVS WebRTC video streaming (requires the robarmV2H device template)")
     return parser.parse_args()
 
 
@@ -1508,7 +1509,7 @@ def main():
     if _webrtc_enabled:
         print("WebRTC streaming: ENABLED (--webrtc)")
     if args.camera is None:
-        detected = cam_settings.find_brio_index(fallback=2)
+        detected = cam_settings.find_camera_index(fallback=0)
         print(f"[main] --camera not specified -> auto-detected /dev/video{detected}")
         args.camera = detected
     global _runtime_camera_index
@@ -1540,7 +1541,7 @@ def main():
         #   'mode'       — running a vision mode in-process (camera active)
         #   'idle'       — no mode running; arm + IoTC stay connected so the
         #                  user can drive the arm via cloud commands and resume
-        #                  with set_mode mode=ball/pickplace/asl. No camera.
+        #                  with set_mode mode=yolo-pickplace/... No camera.
         #   (calibrator) — handled inline below; on subprocess exit returns to
         #                  whichever state ('mode' or 'idle') we came from.
         # Cloud commands drive transitions by setting _pending_action.
@@ -1552,9 +1553,9 @@ def main():
         # want to manually drive the arm before kicking off vision.
         if args.mode in IDLE_MODE_ALIASES:
             print(f"[supervisor] starting in IDLE state (--mode {args.mode!r}). "
-                  "Send set_mode mode=ball/pickplace/asl from cloud to start a vision mode.")
+                  "Send set_mode mode=yolo-pickplace from cloud to start a vision mode.")
             state = 'idle'
-            current_mode_name = 'asl'  # fallback if user later sends a no-arg set_mode
+            current_mode_name = DEFAULT_MODE_NAME  # fallback if user later sends a no-arg set_mode
         else:
             state = 'mode'
             current_mode_name = args.mode
@@ -1572,14 +1573,24 @@ def main():
                     current_mode_name = args.mode
                     continue
                 print(f"Starting vision mode: {current_mode_name}")
-                run_mode(arm, mode, camera_index=args.camera,
-                         headless=args.headless, perf_every=args.perf_every,
-                         web_port=args.web_port)
+                try:
+                    run_mode(arm, mode, camera_index=args.camera,
+                             headless=args.headless, perf_every=args.perf_every,
+                             web_port=args.web_port)
+                finally:
+                    # Unload the model now, not whenever the GC gets to it: the
+                    # DRP-AI is one shared accelerator, and the next mode or a
+                    # calibrator subprocess needs it free.
+                    try:
+                        mode.close()
+                    except Exception as e:
+                        print(f"[supervisor] mode close failed: {e}")
+                    mode = None
                 action = consume_pending_action()
 
             elif state == 'idle':
                 print("[supervisor] IDLE — no vision mode running. Arm + IoTC stay live. "
-                      "Send set_mode mode=ball/pickplace/asl, calibrate target=…, or any "
+                      "Send set_mode mode=yolo-pickplace, calibrate target=…, or any "
                       "movement command.")
                 while not has_pending_action():
                     if arm is not None:
@@ -1613,7 +1624,7 @@ def main():
             label = action[2] if len(action) > 2 else os.path.basename(argv[1])
             print(f"[supervisor] releasing arm for subprocess: {label}")
             arm = _release_arm(arm)
-            time.sleep(0.5)  # let kernel drop the hidraw exclusive lock
+            time.sleep(0.5)  # let libusb release the arm's HID interface
 
             print(f"[supervisor] spawning subprocess: {' '.join(argv)}")
             try:

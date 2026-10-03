@@ -1,13 +1,14 @@
 [Unit]
 Description=Robotic Arm pick-and-place demo (idle-start, auto-recover)
-After=network.target
+After=network.target weston.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 Environment=PATH=/usr/bin:/bin:/usr/sbin:/sbin
 Environment=HOME=/root
-ExecStart=/bin/sh /root/arm_watchdog.sh
+# deploy/install_service.sh rewrites this path to wherever the repo lives.
+ExecStart=/bin/sh /root/iotc-renesas-rzv2h-robotic-arm/deploy/arm_watchdog.sh
 Restart=always
 RestartSec=5
 

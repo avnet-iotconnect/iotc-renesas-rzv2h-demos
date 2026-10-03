@@ -101,9 +101,7 @@ class State:
 
 def camera_loop(state, camera_index, width, height, lower, upper,
                 camera_settings_path=None, jpeg_quality=80):
-    cap = cv2.VideoCapture(camera_index)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    cap = cam_settings.open_capture(camera_index, width, height)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     cam_settings.apply(cap, cam_settings.load(
         camera_settings_path or cam_settings.DEFAULT_PATH))
@@ -427,8 +425,8 @@ def _local_ip_hint():
 
 def main():
     parser = argparse.ArgumentParser(description="Browser cam-gripper offset calibrator")
-    parser.add_argument("--camera", type=int, default=2,
-                        help="OpenCV camera index (default 2 — Tria's direct UVC path to the Brio at /dev/video2; index 1 is the Qualcomm cam-serve shim that ignores V4L2 controls)")
+    parser.add_argument("--camera", type=int, default=cam_settings.find_camera_index(fallback=0),
+                        help="OpenCV camera index (default: auto-detect the USB camera)")
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--port", type=int, default=8000, help="HTTP listen port")

@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Avnet
-"""YOLO-based pick-and-place — NPU-accelerated ball detection.
+"""YOLO-based pick-and-place — DRP-AI-accelerated ball detection.
 
 A separate application that mirrors the HSV pickplace demo but swaps the
-*ball* detector from OpenCV HSV thresholding to a YOLOv8 model running on the
-Hexagon NPU (QNN execution provider, CPU fallback). The *box* still uses the
+*ball* detector from OpenCV HSV thresholding to a YOLO model running on the
+RZ/V2H DRP-AI accelerator (CPU TFLite fallback). The *box* still uses the
 proven HSV pipeline — it's static and colour-calibrated, so there's little to
 gain from a model there, and keeping it means we reuse PickPlaceMode's
 box-seek / lock / verify state machine unchanged.
@@ -85,10 +85,10 @@ class YoloBallFollowMode(BallFollowMode):
     def __init__(self, detector, depth_detector=None):
         super().__init__()
         self.detector = detector
-        # MiDaS-based monocular depth on the same NPU. When present we sample
-        # D = depth at the ball's centre each frame. When grab_depth.json is
-        # also present (from teach_grab_depth.py), the descent + grab gates
-        # switch from pixel-radius to depth.
+        # Optional MiDaS-based monocular depth. When present we sample
+        # D = depth at the ball's centre each frame and the grab gate can
+        # use it (grab_threshold_store). Without a depth model the gate runs
+        # on the ball's apparent radius alone.
         self.depth = depth_detector
         self.last_depth_at_ball = None
         self.last_depth_at_ball_smoothed = None  # EWMA-smoothed for gate
@@ -101,7 +101,7 @@ class YoloBallFollowMode(BallFollowMode):
         self._centered_streak = 0
         # Consecutive frames depth_ok has been true (DEPTH_SETTLE_FRAMES gate).
         self._depth_settle = 0
-        # NPU per-inference latency EWMAs, surfaced in overlay + telemetry.
+        # Per-inference latency EWMAs, surfaced in overlay + telemetry.
         self._yolo_ms_ewma = 0.0
         self._depth_ms_ewma = 0.0
         self._frame_ms_ewma = 0.0
@@ -135,6 +135,11 @@ class YoloBallFollowMode(BallFollowMode):
         self.scan_idx = 0
         self.last_scan_move_at = time.time()
         self.state = "IDLE"
+
+    def close(self):
+        for d in (self.detector, self.depth):
+            if d is not None:
+                d.close()
 
     def _detect_ball(self, frame):
         """Return (cx, cy, r) for the nearest (largest) ball, or None."""
@@ -265,7 +270,7 @@ class YoloBallFollowMode(BallFollowMode):
                 print(f"[yolo-ball] depth inference failed: {e}")
                 self.last_depth_at_ball = None
                 self.last_depth_at_ball_smoothed = None
-        # NPU perf EWMAs (alpha=0.1 = ~10-frame moving average)
+        # Inference perf EWMAs (alpha=0.1 = ~10-frame moving average)
         a = 0.1
         self._yolo_ms_ewma = a * (t_detect * 1000.0) + (1 - a) * self._yolo_ms_ewma
         self._depth_ms_ewma = a * depth_ms + (1 - a) * self._depth_ms_ewma
@@ -354,13 +359,14 @@ class YoloBallFollowMode(BallFollowMode):
                         f"D={d_smooth_str} (raw {self.last_depth_at_ball:.0f})  higher=closer",
                         (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                         (200, 200, 255), 2, cv2.LINE_AA)
-        # NPU perf overlay (live yolo/depth ms + effective fps)
+        # Inference perf overlay (backend, live yolo/depth ms, effective fps)
         fps = (1000.0 / self._frame_ms_ewma) if self._frame_ms_ewma > 0 else 0.0
+        backend = getattr(self.detector, "backend", "?")
         if self.depth is not None:
-            perf_line = (f"NPU: yolo={self._yolo_ms_ewma:.1f}ms  "
+            perf_line = (f"{backend}: yolo={self._yolo_ms_ewma:.1f}ms  "
                          f"depth={self._depth_ms_ewma:.1f}ms  {fps:.0f} fps")
         else:
-            perf_line = f"NPU: yolo={self._yolo_ms_ewma:.1f}ms  {fps:.0f} fps"
+            perf_line = f"{backend}: yolo={self._yolo_ms_ewma:.1f}ms  {fps:.0f} fps"
         cv2.putText(annotated, perf_line, (10, 130),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (160, 220, 160), 1, cv2.LINE_AA)
 
@@ -451,11 +457,13 @@ class YoloBallFollowMode(BallFollowMode):
         return annotated
 
     def telemetry(self):
-        """Extend BallFollowMode.telemetry with NPU perf + depth gate state so
-        IoTConnect can graph yolo_ms / depth_ms / npu_fps and the depth_settle
-        counter. Backwards-compatible: existing fields preserved."""
+        """Extend BallFollowMode.telemetry with inference perf + depth gate
+        state so IoTConnect can graph yolo_ms / depth_ms / npu_fps and the
+        depth_settle counter. Field names match the Tria demo's template so
+        the same dashboard works; ``backend`` says where YOLO actually ran."""
         base = super().telemetry()
         base.update({
+            "backend": getattr(self.detector, "backend", "?"),
             "yolo_ms": round(self._yolo_ms_ewma, 1),
             "depth_ms": round(self._depth_ms_ewma, 1),
             "npu_fps": round(1000.0 / self._frame_ms_ewma, 1)
@@ -553,6 +561,11 @@ class YoloPickPlaceMode(PickPlaceMode):
         super().__init__()
         self.detector = detector
         self.depth_detector = depth_detector
+
+    def close(self):
+        for d in (self.detector, self.depth_detector):
+            if d is not None:
+                d.close()
 
     def _enter_ball_phase(self, arm):
         suffix = " + depth overlay" if self.depth_detector is not None else ""

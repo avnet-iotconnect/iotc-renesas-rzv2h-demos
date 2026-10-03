@@ -3,14 +3,14 @@
 # Copyright (C) 2026 Avnet
 """One-shot depth detector self-test — NO arm motion.
 
-Grabs a frame from the camera, runs MiDaS through the QNN HTP delegate, and
+Grabs a frame from the camera, runs the installed MiDaS depth model, and
 prints depth-value stats + saves a side-by-side image of the raw frame and
 the depth colormap so you can eyeball whether the depth makes sense for your
 scene.
 
 Usage::
 
-    /root/miniforge3/envs/iotc-tria-xarm/bin/python3 depth_selftest.py [--camera 2]
+    python3 depth_selftest.py [--camera N]
 
 The MJPEG demo (./start_yolo.sh) holds the camera — stop it before running.
 """
@@ -21,23 +21,31 @@ import time
 import cv2
 import numpy as np
 
-from detectors.depth_detector import DepthDetector
+import camera_settings as cam_settings
+
+from detectors.depth_detector import DepthDetector, default_depth_model
+
+
+def _open_depth(path):
+    if not path:
+        raise SystemExit("no depth model installed — put a DRP-AI TVM model in "
+                         "model/midas_drpai/ or a TFLite model at model/midas.tflite "
+                         "(see README: depth is optional on the RZ/V2H)")
+    return DepthDetector(path)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--camera", type=int, default=2)
-    ap.add_argument("--model", default="/etc/models/midas_quantized.tflite")
-    ap.add_argument("--cpu", action="store_true")
+    ap.add_argument("--camera", type=int, default=cam_settings.find_camera_index(fallback=0),
+                        help="OpenCV camera index (default: auto-detect the USB camera)")
+    ap.add_argument("--model", default=default_depth_model())
     ap.add_argument("--save", default="/tmp/depth_selftest.jpg",
                     help="side-by-side raw|depth-colormap output path")
     args = ap.parse_args()
 
-    depth = DepthDetector(args.model, use_npu=not args.cpu)
+    depth = _open_depth(args.model)
 
-    cap = cv2.VideoCapture(args.camera)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap = cam_settings.open_capture(args.camera, 640, 480)
     frame = None
     for _ in range(10):
         ok, f = cap.read()
@@ -53,7 +61,7 @@ def main():
     t = time.perf_counter()
     d = depth.infer(frame)
     dt = (time.perf_counter() - t) * 1000
-    print(f"depth: {dt:.1f} ms total (NPU inference + resize)")
+    print(f"depth: {dt:.1f} ms total (inference + resize)")
     print(f"depth stats: min={d.min():.1f} max={d.max():.1f} "
           f"mean={d.mean():.1f} std={d.std():.1f}")
 

@@ -1,6 +1,6 @@
 {
-    "code": "robarmRTC",
-    "name": "robarmRTC",
+    "code": "robarmV2H",
+    "name": "robarmV2H",
     "authType": 2,
     "attributes": [
         {
@@ -174,7 +174,7 @@
                     "name": "temp",
                     "displayName": "",
                     "type": "DECIMAL",
-                    "description": "Hottest CPU thermal zone (max of cpu*-thermal sensors).",
+                    "description": "Hottest CPU thermal zone (max of the cpu-thermal sensors).",
                     "unit": "C",
                     "attributeColor": ""
                 },
@@ -224,7 +224,7 @@
                     "name": "temp",
                     "displayName": "",
                     "type": "DECIMAL",
-                    "description": "DDR memory thermal zone (ddr-thermal sensor).",
+                    "description": "Not available on the RZ/V2H (always 0).",
                     "unit": "C",
                     "attributeColor": ""
                 },
@@ -325,14 +325,14 @@
             "name": "sysInfo_gpu",
             "displayName": "",
             "type": "OBJECT",
-            "description": "Adreno GPU utilization and temperature.",
+            "description": "Not available on the RZ/V2H (always 0); kept so the dashboard shared with the Tria demo imports unchanged.",
             "attributeColor": "",
             "childs": [
                 {
                     "name": "usage_percent",
                     "displayName": "",
                     "type": "DECIMAL",
-                    "description": "Adreno GPU busy percentage from /sys/class/kgsl/kgsl-3d0/gpubusy.",
+                    "description": "Not available on the RZ/V2H (always 0).",
                     "unit": "%",
                     "attributeColor": ""
                 },
@@ -340,7 +340,7 @@
                     "name": "temp",
                     "displayName": "",
                     "type": "DECIMAL",
-                    "description": "Hottest GPU thermal zone (max of gpuss*-thermal sensors).",
+                    "description": "Not available on the RZ/V2H (always 0).",
                     "unit": "C",
                     "attributeColor": ""
                 }
@@ -494,7 +494,7 @@
                     "name": "yolo_ms",
                     "displayName": "",
                     "type": "DECIMAL",
-                    "description": "EWMA YOLO inference latency on the Hexagon NPU (yolo-ball/yolo-pickplace modes only).",
+                    "description": "EWMA YOLO inference latency in ms, on the backend named in `backend` (yolo-ball/yolo-pickplace modes only).",
                     "unit": "ms",
                     "attributeColor": ""
                 },
@@ -502,7 +502,7 @@
                     "name": "depth_ms",
                     "displayName": "",
                     "type": "DECIMAL",
-                    "description": "EWMA MiDaS depth inference latency on the Hexagon NPU.",
+                    "description": "EWMA MiDaS depth inference latency in ms (0 when no depth model is installed).",
                     "unit": "ms",
                     "attributeColor": ""
                 },
@@ -551,6 +551,38 @@
                     "displayName": "",
                     "type": "DECIMAL",
                     "description": "Effective depth gate width (max of DEPTH_TOL_FLOOR and 1.5 * D_stdev).",
+                    "unit": "",
+                    "attributeColor": ""
+                },
+                {
+                    "name": "backend",
+                    "displayName": "",
+                    "type": "STRING",
+                    "description": "Where YOLO inference ran: DRP-AI or CPU.",
+                    "unit": "",
+                    "attributeColor": ""
+                },
+                {
+                    "name": "gate_mode",
+                    "displayName": "",
+                    "type": "STRING",
+                    "description": "Grab gate mode: depth | radius | both.",
+                    "unit": "",
+                    "attributeColor": ""
+                },
+                {
+                    "name": "D_threshold",
+                    "displayName": "",
+                    "type": "DECIMAL",
+                    "description": "Depth floor of the grab gate (set_grab_threshold).",
+                    "unit": "",
+                    "attributeColor": ""
+                },
+                {
+                    "name": "r_target",
+                    "displayName": "",
+                    "type": "DECIMAL",
+                    "description": "Ball-radius target of the grab gate in px (set_grab_radius / taught).",
                     "unit": "",
                     "attributeColor": ""
                 }
@@ -826,13 +858,6 @@
             "isOTACommand": false
         },
         {
-            "name": "set_mode_asl",
-            "command": "set_mode_asl",
-            "requiredParam": false,
-            "requiredAck": true,
-            "isOTACommand": false
-        },
-        {
             "name": "set_mode_ball",
             "command": "set_mode_ball",
             "requiredParam": false,
@@ -884,6 +909,41 @@
         {
             "name": "teach_scan_pose",
             "command": "teach_scan_pose",
+            "requiredParam": false,
+            "requiredAck": true,
+            "isOTACommand": false
+        },
+        {
+            "name": "set_grab_gate",
+            "command": "set_grab_gate",
+            "requiredParam": true,
+            "requiredAck": true,
+            "isOTACommand": false
+        },
+        {
+            "name": "set_grab_radius",
+            "command": "set_grab_radius",
+            "requiredParam": true,
+            "requiredAck": true,
+            "isOTACommand": false
+        },
+        {
+            "name": "set_grab_threshold",
+            "command": "set_grab_threshold",
+            "requiredParam": true,
+            "requiredAck": true,
+            "isOTACommand": false
+        },
+        {
+            "name": "grab_threshold_show",
+            "command": "grab_threshold_show",
+            "requiredParam": false,
+            "requiredAck": true,
+            "isOTACommand": false
+        },
+        {
+            "name": "grab_threshold_reset",
+            "command": "grab_threshold_reset",
             "requiredParam": false,
             "requiredAck": true,
             "isOTACommand": false

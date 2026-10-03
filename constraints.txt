@@ -1,0 +1,4 @@
+# The RZ/V AI SDK image's OpenCV is compiled against numpy 1.26. Letting pip
+# pull numpy 2.x in (ai_edge_litert and friends ask for "numpy" unpinned)
+# breaks `import cv2` with "numpy.core.multiarray failed to import".
+numpy==1.26.4

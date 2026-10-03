@@ -87,6 +87,8 @@ import numpy as np
 import xarm
 from xarm import Servo
 
+import camera_settings as cam_settings
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 HSV_PATH = os.path.join(HERE, "ball_color.json")
 BALL_FOLLOW_PATH = os.path.join(HERE, "modes", "ball_follow.py")
@@ -172,9 +174,7 @@ def cleanup(signum=None, frame=None):
 
 
 def camera_loop(cam_index, width, height, lower, upper):
-    cap = cv2.VideoCapture(cam_index)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    cap = cam_settings.open_capture(cam_index, width, height)
     if not cap.isOpened():
         print(f"[calib] ERROR: could not open camera {cam_index}")
         return
@@ -617,7 +617,8 @@ def save_wrist_trim():
 def main():
     global arm
     parser = argparse.ArgumentParser()
-    parser.add_argument("--camera", type=int, default=2)
+    parser.add_argument("--camera", type=int, default=cam_settings.find_camera_index(fallback=0),
+                        help="OpenCV camera index (default: auto-detect the USB camera)")
     parser.add_argument("--width",  type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     args = parser.parse_args()
