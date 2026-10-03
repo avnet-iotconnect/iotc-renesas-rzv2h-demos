@@ -44,6 +44,13 @@ CUSTOM_TFLITE_MODEL = os.path.join(HERE, "model", "ball_best.tflite")
 # Stock COCO YOLOv3 from the RZ/V AI SDK R01 object-detection app.
 STOCK_DRPAI_MODEL = "/home/weston/R01_object_detection/exe_v2h/yolov3_onnx"
 
+# Default confidence for the custom 1-class ball model. 0.30 is what the Tria
+# fleet runs at, and the first powered run on the RZ/V2H confirmed it: a
+# well-lit ball close to the camera (r ~ 100 px, larger than most of the
+# training set) scored 0.4-0.6, so 0.5 dropped it on most frames, while
+# background false positives stayed below ~0.15.
+CUSTOM_MODEL_CONF = 0.30
+
 # YOLOv3 anchors in network-input pixels: [finest grid, middle, coarsest grid].
 YOLOV3_ANCHORS = np.array(
     [[10, 13], [16, 30], [33, 23],
@@ -63,12 +70,9 @@ def default_ball_model(use_drpai=True):
     ``sports ball`` class even when it has to run on the CPU. ``use_drpai=False``
     skips the DRP-AI entries."""
     if use_drpai and is_drpai_model(CUSTOM_DRPAI_MODEL):
-        return CUSTOM_DRPAI_MODEL, 0.5
+        return CUSTOM_DRPAI_MODEL, CUSTOM_MODEL_CONF
     if os.path.exists(CUSTOM_TFLITE_MODEL):
-        # 0.5: a ball partially cut off at the frame edge scores ~0.4-0.5 while
-        # fully-visible detections sit at 0.95+, so 0.5 keeps tracking sticky
-        # at the edges without admitting noise.
-        return CUSTOM_TFLITE_MODEL, 0.5
+        return CUSTOM_TFLITE_MODEL, CUSTOM_MODEL_CONF
     if use_drpai and is_drpai_model(STOCK_DRPAI_MODEL):
         return STOCK_DRPAI_MODEL, 0.25
     raise RuntimeError(
@@ -425,8 +429,8 @@ def make_ball_detector(model_name=None, conf_thres=None, use_drpai=True,
 
     ``model_name=None`` picks the best available model (``default_ball_model``).
     ``conf_thres=None`` uses the model's default: 0.25 for the stock COCO
-    model (sports ball is one of 80 classes and scores low), 0.5 for a custom
-    1-class model.
+    model (sports ball is one of 80 classes and scores low), CUSTOM_MODEL_CONF
+    for a custom 1-class model.
 
     The class filter defaults differ by model:
       - multi-class model (stock COCO YOLOv3) → filter to COCO 32 (sports ball).
@@ -445,7 +449,7 @@ def make_ball_detector(model_name=None, conf_thres=None, use_drpai=True,
                        **kwargs)
     if conf_thres is None:
         det.conf_thres = default_conf if default_conf is not None else (
-            0.25 if det.nc > 1 else 0.5)
+            0.25 if det.nc > 1 else CUSTOM_MODEL_CONF)
     if class_ids == "auto":
         multi_class = det.nc > 1 or det.format == "predecoded"
         class_ids = (COCO_SPORTS_BALL,) if multi_class else None

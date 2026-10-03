@@ -165,7 +165,7 @@ the board. A healthy board ends with:
   xArm                       xArm found on USB
   DRP-AI                     runtime + /dev/drpai0 OK
   USB camera                 /dev/video0 (Innomaker-U20CAM-1080p-S1: Inno)
-  ball model                 model/ball_best.tflite (conf 0.5)
+  ball model                 model/ball_best.tflite (conf 0.3)
 
 All checks passed.
 ```
@@ -321,7 +321,7 @@ Useful variations:
 ./start.sh --mode yolo-ball --web-port 8080     # find and grab only, no drop
 ./start.sh --webrtc --web-port 8080             # + live video in the /IOTCONNECT portal (§9)
 ./start.sh --headless --web-port 8080           # browser view only, nothing on HDMI
-YOLO_CONF=0.3 ./start.sh --web-port 8080        # override the detection confidence
+YOLO_CONF=0.4 ./start.sh --web-port 8080        # override the detection confidence (default 0.30)
 YOLO_CPU=1 ./start.sh --web-port 8080           # never use DRP-AI models
 ```
 
@@ -513,7 +513,7 @@ this board; the radius gate does not need one.
 | ~15 fps camera instead of 30 | Same cause — the V4L2 backend needs the frame rate requested, which `open_capture()` does |
 | Demo runs on `backend=CPU` | No DRP-AI ball model installed; that is the default. See [§1](#1-how-it-works-on-the-rzv2h) |
 | TVM error when a mode starts | Another process is using DRP-AI (a Renesas HDMI demo, a second copy of this app), or the model was compiled with a different DRP-AI TVM version than the board's `libtvm_runtime.so` |
-| Ball visible but never detected | Check `python3 yolo_selftest.py` with the ball in view. Lower the threshold (`YOLO_CONF=0.3`); if it still fails, the ball or lighting differs from the training set — retrain ([CUSTOM_DRPAI_DETECTOR.md](CUSTOM_DRPAI_DETECTOR.md)) |
+| Ball visible but never detected | Almost always exposure, not the threshold: under the arm's shadow the ball comes out dark brown and scores below 0.05. Send `camera_setting auto` (or raise `exposure` / `gain`) until the ball looks bright yellow in the view. It also scores lower when it fills much of the frame — teach the scan poses higher above the table. If it still fails with a well-lit ball, retrain ([CUSTOM_DRPAI_DETECTOR.md](CUSTOM_DRPAI_DETECTOR.md)) |
 | Arm tracks but never grabs | The gate isn't satisfied: read the gate line in the overlay, then re-teach with `./teach_grab.sh` or send `set_grab_radius <px>` |
 | Arm steers away from the ball | `PAN_DIR` / `TILT_DIR` sign is wrong for your mounting |
 | `pick-and-place needs a drop target` | Neither a drop pose nor a box colour has been taught ([§5](#5-per-site-calibration)). The app drops back to idle and stays connected; teach one and send `set_mode` again |

@@ -56,7 +56,7 @@ def parse_args():
                         "(default: best installed model)")
     p.add_argument("--conf", type=float, default=None,
                    help="detection confidence threshold "
-                        "(default: 0.25 for the stock COCO model, 0.5 for a custom ball model)")
+                        "(default: 0.25 for the stock COCO model, 0.30 for a custom ball model)")
     p.add_argument("--box-order", default="xyxy", choices=["xyxy", "xywh"],
                    help="layout of the model's 4 box values")
     p.add_argument("--cpu", action="store_true",
