@@ -11,6 +11,7 @@ RZ/V2H DRP-AI accelerator).
 """
 
 import argparse
+import faulthandler
 import gc
 import json
 import os
@@ -1516,8 +1517,8 @@ def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
     t_total_sum = 0.0
     t_window_start = time.time()
 
-    # Full-screen status display on the board's HDMI output, drawn on its
-    # own thread so it doesn't slow the control loop.
+    # Full-screen status display on the board's HDMI output, drawn by its
+    # own process so it neither slows the control loop nor can crash it.
     screen = hud.Screen(window_title) if not headless else None
 
     try:
@@ -1623,6 +1624,10 @@ def parse_args():
 
 
 def main():
+    # A crash inside native code (OpenCV, the NN runtimes, libusb) kills the
+    # process without a Python traceback. This at least writes which thread
+    # was where to the log.
+    faulthandler.enable()
     args = parse_args()
     global _webrtc_enabled
     _webrtc_enabled = args.webrtc

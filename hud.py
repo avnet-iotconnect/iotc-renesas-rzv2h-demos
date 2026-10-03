@@ -14,6 +14,10 @@ for a native one. The panel is only redrawn when the state changes or a few
 times a second — its anti-aliased text is the costly part of the picture.
 """
 
+import json
+import os
+import subprocess
+import sys
 import threading
 import time
 
@@ -127,23 +131,30 @@ def _draw_panel(info):
 
 
 class Screen:
-    """The full-screen HDMI window, drawn on its own thread.
+    """The full-screen HDMI window, drawn by a separate process.
 
     Composing and showing the picture costs ~40 ms on the Cortex-A55 — more
     than a DRP-AI inference — so doing it inline would cap the control loop
     well below what the accelerator allows. The loop just hands over its
-    latest frame; this thread draws whatever is newest and drops the rest.
-    All window calls stay on this one thread, as the GUI toolkit requires.
+    latest frame; a writer thread pipes it to a child process that owns the
+    window, and frames that arrive while the child is busy are dropped.
+
+    A process, not a thread: the GUI toolkit is only safe on the thread that
+    initialised it, and driving the window from a second thread of the main
+    app took the whole app down with a segfault after half an hour. In its
+    own process the window can at worst take itself down.
     """
 
     def __init__(self, title):
-        self._title = title
+        self.quit_requested = False      # ESC or 'q' pressed in the window
         self._latest = None
         self._lock = threading.Lock()
         self._new = threading.Event()
         self._stop = threading.Event()
-        self.quit_requested = False      # ESC or 'q' pressed in the window
-        self._thread = threading.Thread(target=self._run, name="hdmi-screen", daemon=True)
+        self._proc = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), title],
+            stdin=subprocess.PIPE)
+        self._thread = threading.Thread(target=self._feed, name="hdmi-feed", daemon=True)
         self._thread.start()
 
     def show(self, frame, info):
@@ -152,31 +163,66 @@ class Screen:
             self._latest = (frame, info)
         self._new.set()
 
-    def _run(self):
+    def _feed(self):
+        pipe = self._proc.stdin
         try:
-            cv2.namedWindow(self._title, cv2.WINDOW_NORMAL)
-            cv2.setWindowProperty(self._title, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
             while not self._stop.is_set():
-                if not self._new.wait(timeout=0.2):
-                    cv2.waitKey(1)       # keep the window responsive while idle
+                if not self._new.wait(timeout=0.5):
+                    if self._proc.poll() is not None:
+                        break
                     continue
                 self._new.clear()
                 with self._lock:
                     frame, info = self._latest
-                cv2.imshow(self._title, compose(frame, info))
-                key = cv2.waitKey(1)
-                if key in (27, 113):
-                    self.quit_requested = True
-        except Exception as e:
-            print(f"[hud] HDMI screen stopped: {e}")
-        finally:
-            try:
-                cv2.destroyWindow(self._title)
-                cv2.waitKey(1)
-            except Exception:
-                pass
+                header = json.dumps({"shape": frame.shape, "info": info}) + "\n"
+                pipe.write(header.encode())
+                pipe.write(frame.tobytes())
+                pipe.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+        rc = self._proc.poll()
+        if rc == QUIT_EXIT_CODE:
+            self.quit_requested = True
+        elif rc is not None and not self._stop.is_set():
+            print(f"[hud] HDMI screen process exited (code {rc}); the demo carries on without it")
 
     def close(self):
         self._stop.set()
         self._new.set()
-        self._thread.join(timeout=2.0)
+        try:
+            self._proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            self._proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            self._proc.terminate()
+        self._thread.join(timeout=1.0)
+
+
+QUIT_EXIT_CODE = 3
+
+
+def _serve(title):
+    """Child process: read frames from stdin and show them until EOF."""
+    stdin = sys.stdin.buffer
+    cv2.namedWindow(title, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(title, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    while True:
+        line = stdin.readline()
+        if not line:
+            break
+        meta = json.loads(line)
+        h, w, c = meta["shape"]
+        data = stdin.read(h * w * c)
+        if len(data) < h * w * c:
+            break
+        frame = np.frombuffer(data, dtype=np.uint8).reshape(h, w, c)
+        cv2.imshow(title, compose(frame, meta["info"]))
+        if cv2.waitKey(1) in (27, 113):
+            sys.exit(QUIT_EXIT_CODE)
+    cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    _serve(sys.argv[1] if len(sys.argv) > 1 else "IOTCONNECT XArm Control")
