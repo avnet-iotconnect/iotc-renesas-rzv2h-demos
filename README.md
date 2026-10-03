@@ -65,10 +65,11 @@ misses the ball can't pick it up. Compiling the custom model for DRP-AI
 `model/ball_drpai/` exists.
 
 **Loop rate.** The control loop is slower than the detector alone: every frame
-also reads the six servo positions over USB, which costs ~115 ms on this
-board. With the arm attached the bundled CPU model runs the loop at **~3.6 fps**
-(measured). Against a simulated arm (`yolo_dryrun.py`) the same loop reaches
-~8 fps on the CPU model and ~18 fps on the stock DRP-AI model.
+also reads the six servo positions over USB (~115 ms on this board) and draws
+the HDMI screen. The servo reads run on a helper thread while YOLO runs, which
+puts the bundled CPU model at **~4.9 fps** with the arm attached (measured;
+3.6 fps before that change). Against a simulated arm (`yolo_dryrun.py`) the
+same loop reaches ~8 fps on the CPU model and ~18 fps on the stock DRP-AI model.
 
 To force a specific model: `YOLO_MODEL=/home/weston/R01_object_detection/exe_v2h/yolov3_onnx ./start.sh`.
 
@@ -250,6 +251,33 @@ The arm, the camera and the lighting differ at every site, so a few values
 have to be taught. Each tool writes a JSON file next to the code; the demo
 loads them at start.
 
+### The quick way: automatic calibration
+
+Put one ball on the mat inside the arm's reach, keep your hands clear, and run
+
+```bash
+python3 auto_calibrate.py --web-port 8000     # watch at http://<board-ip>:8000/
+```
+
+or send `calibrate target=auto` from /IOTCONNECT (the demo pauses itself, runs
+the calibration and resumes). It needs no hand-posing:
+
+1. **Find** — sweeps the scan poses until the detector sees the ball.
+2. **Camera** — sweeps exposure, gain and white balance with the ball in view
+   and keeps the setting where the ball scores highest and nothing else is
+   detected.
+3. **Grab** — centres on the ball and steps down toward it, closing the
+   gripper as it goes. The gripper stalls part-way when it closes on the ball
+   and closes fully on nothing, so the arm finds the grab distance by itself.
+   It then lifts to confirm the hold and puts the ball back.
+
+It writes `camera_settings.json`, `grab_depth.json`, `grab_threshold.json` and
+`approach_limits.json`. What it does not do is choose scan poses or a drop
+pose — the manual steps below cover those, and everything else if you prefer
+to do it by hand.
+
+### The manual way
+
 > [!CAUTION]
 > The teach tools **release servo torque** so you can pose the arm by hand.
 > Support the arm *before* you release it or it will drop.
@@ -320,9 +348,12 @@ cd /root/iotc-renesas-rzv2h-robotic-arm
 ./start.sh --web-port 8080
 ```
 
-The annotated camera view opens **full screen on the HDMI monitor** — from an
-SSH or serial shell too, since `start.sh` attaches to the board's Weston
-display itself — and is served at `http://<board-ip>:8080/`. The log goes to
+The HDMI monitor shows the camera view full screen with a status panel beside
+it: where inference is running (DRP-AI or CPU) and how long it takes, the
+control-loop rate, the current state, and how many balls have been moved. It
+appears from an SSH or serial shell too, since `start.sh` attaches to the
+board's Weston display itself. The camera view alone is also served at
+`http://<board-ip>:8080/`. The log goes to
 the terminal and to `run.log`.
 
 Useful variations:
@@ -427,9 +458,9 @@ attention on a new build:
 
 > [!NOTE]
 > Several of these are counted in **frames**, and the defaults were tuned on
-> the Tria at ~14 fps. This board runs the loop at ~3.6 fps with the bundled
+> the Tria at ~14 fps. This board runs the loop at ~5 fps with the bundled
 > CPU model, so frame-counted behaviour (grace periods, settle time) takes
-> about four times longer. Re-tune if tracking feels sluggish.
+> about three times longer. Re-tune if tracking feels sluggish.
 
 ---
 
@@ -445,6 +476,8 @@ Sent every ~5 s and after each grab.
 | `gripper`, `wrist_roll`, `wrist_flex`, `elbow_flex`, `shoulder_lift`, `shoulder_pan` | Servo positions (0–1000) |
 | `sysInfo_system`, `sysInfo_cpu`, `sysInfo_memory`, `sysInfo_storage` | Host, CPU load + temperature, RAM, disk |
 | `sysInfo_gpu`, `sysInfo_memory.temp` | Always 0 on the RZ/V2H; kept for dashboard compatibility |
+| `demoStats.drops`, `grab_attempts`, `grabs_held`, `grabs_empty`, `grabs_slipped`, `grab_success_pct` | Pick-and-place counters since the app started |
+| `demoStats.last_cycle_s`, `avg_cycle_s`, `uptime_min` | Seconds between completed drops; minutes running |
 | `ballTrack.backend` | Where YOLO ran: `DRP-AI` or `CPU` |
 | `ballTrack.yolo_ms`, `ballTrack.npu_fps` | Inference time and loop rate |
 | `ballTrack.ball_x`, `ball_y`, `ball_r` | Last detection, pixels |
@@ -466,9 +499,13 @@ Sent every ~5 s and after each grab.
 | `release_torque` / `hold_pose` | Drop / re-engage servo torque for hand-posing |
 | `teach_scan_pose name=<n>`, `scan_poses_show`, `scan_poses_reset` | Manage scan poses |
 | `teach_drop_pose`, `drop_pose_show`, `drop_pose_reset` | Manage the drop pose |
+| `calibrate target=auto` | Automatic camera + grab-distance calibration ([§5](#5-per-site-calibration)); progress at `http://<board-ip>:8000/` |
 | `calibrate target=<ball\|box\|offset\|grab_depth>` | Start a browser calibrator at `http://<board-ip>:8000/` |
 | `stop_calibration` | Stop the calibrator and resume |
 | `set_grab_gate`, `set_grab_radius`, `set_grab_threshold`, `grab_threshold_show`, `grab_threshold_reset` | Grab gate, see [§7](#grab-gate) |
+| `set_backend <auto\|drpai\|cpu>` | Choose where YOLO runs; a running YOLO mode restarts on the new backend. `drpai` uses the custom DRP-AI model if installed, else the stock COCO one |
+| `set_yolo_conf <0.05–0.95\|auto>` | Detection confidence threshold, applied live |
+| `yolo_config_show` | Read back the backend and confidence settings |
 | `camera_setting <name> <value>`, `camera_settings_show`, `camera_settings_reset` | Camera controls |
 | `camera_preset <name>`, `camera_preset_save <name>`, `camera_presets_show` | Camera presets |
 
@@ -520,8 +557,9 @@ this board; the radius gate does not need one.
 | `ImportError: numpy.core.multiarray failed to import` | A `pip install` upgraded numpy to 2.x. `python3 -m pip install numpy==1.26.4`, and always install with `-c constraints.txt` |
 | `could not open the xArm over USB` | Arm unpowered or unplugged (`python3 list_usb.py` should list `0483:5750`), or another process has it — stop the other demo or `touch /tmp/demo_watchdog_off` |
 | No `/dev/hidraw*` | Expected. This kernel has no hidraw; the arm is driven through libusb by the `hidapi` wheel |
+| Board stops responding after a while (ping works, SSH and the app don't) | Out of memory. This image's OpenCV leaks a frame on every read of a YUYV camera stream through the V4L2 backend; `camera_settings.open_capture()` requests MJPG to avoid it. Any code that opens the camera another way will leak. Recover without a power cycle from the serial console: send a break followed by `f` (needs `kernel.sysrq=1`) |
 | Camera opens but exposure / saturation commands do nothing | Something opened the camera with OpenCV's default GStreamer backend. Use `camera_settings.open_capture()`, which selects V4L2 |
-| ~15 fps camera instead of 30 | Same cause — the V4L2 backend needs the frame rate requested, which `open_capture()` does |
+| ~15 fps camera instead of 30 | Same cause — the V4L2 backend needs the frame rate requested, which `open_capture()` does. A long manual exposure also caps the rate (exposure 400 = 40 ms = 25 fps at most) |
 | Demo runs on `backend=CPU` | No DRP-AI ball model installed; that is the default. See [§1](#1-how-it-works-on-the-rzv2h) |
 | TVM error when a mode starts | Another process is using DRP-AI (a Renesas HDMI demo, a second copy of this app), or the model was compiled with a different DRP-AI TVM version than the board's `libtvm_runtime.so` |
 | Ball visible but never detected | Almost always the camera, not the threshold: too dark, or washed out by auto white balance, the ball scores below 0.3. Fix white balance (`camera_setting auto_wb 0`, `camera_setting wb_temperature 2800`) and raise `exposure` / `gain` until the ball looks bright yellow in the view — see the camera notes in [§5](#5-per-site-calibration). It also scores lower when it fills much of the frame — teach the scan poses higher above the table. If it still fails with a well-lit ball, retrain ([CUSTOM_DRPAI_DETECTOR.md](CUSTOM_DRPAI_DETECTOR.md)) |

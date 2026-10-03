@@ -8,8 +8,12 @@ wants to know at a glance: where inference is running and how fast, what the
 arm is doing, and how many balls it has moved.
 
 Rendered at 1280x720 and left for the window to scale: drawing straight at
-1080p costs the Cortex-A55 enough per frame to slow the control loop.
+1080p costs the Cortex-A55 enough per frame to slow the control loop. For the
+same reason the panel is only redrawn when the state changes or a few times
+a second — its anti-aliased text costs ~30 ms, the video scaling ~6 ms.
 """
+
+import time
 
 import cv2
 import numpy as np
@@ -47,15 +51,35 @@ def _rule(img, y):
     return y + 26
 
 
+PANEL_REFRESH_S = 0.4
+_panel = None            # cached right-hand panel, shape (H, PANEL_W, 3)
+_panel_key = None        # what forces an immediate redraw
+_panel_at = 0.0
+
+
 def compose(frame, info):
     """Build the HDMI picture.
 
     ``info`` keys (all optional): mode, state, backend ('DRP-AI' | 'CPU'),
     yolo_ms, fps, cloud (bool), stats (demo_stats.snapshot()).
     """
-    canvas = np.full((H, W, 3), BG, dtype=np.uint8)
+    global _panel, _panel_key, _panel_at
+    st = info.get("stats") or {}
+    key = (info.get("mode"), info.get("state"), info.get("backend"), info.get("cloud"),
+           st.get("drops"), st.get("grab_attempts"))
+    now = time.time()
+    if _panel is None or key != _panel_key or now - _panel_at >= PANEL_REFRESH_S:
+        _panel = _draw_panel(info)[:, PANEL_X:].copy()
+        _panel_key, _panel_at = key, now
+    canvas = np.empty((H, W, 3), dtype=np.uint8)
     canvas[:, :VIDEO_W] = cv2.resize(frame, (VIDEO_W, H), interpolation=cv2.INTER_LINEAR)
+    canvas[:, PANEL_X:] = _panel
     cv2.line(canvas, (VIDEO_W, 0), (VIDEO_W, H), RULE, 2)
+    return canvas
+
+
+def _draw_panel(info):
+    canvas = np.full((H, W, 3), BG, dtype=np.uint8)
 
     _text(canvas, "Renesas RZ/V2H", PANEL_X + 22, 46, 0.85, WHITE, _BOLD)
     _text(canvas, "AI pick-and-place", PANEL_X + 22, 76, 0.6, GREY)
