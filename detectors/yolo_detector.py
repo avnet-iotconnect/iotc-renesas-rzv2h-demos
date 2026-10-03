@@ -13,8 +13,13 @@ The backend is picked from what ``model_path`` points at:
     COCO model the RZ/V AI SDK ships for its R01 object-detection app
     (``/home/weston/R01_object_detection/exe_v2h/yolov3_onnx``); COCO class
     32 = ``sports ball``, so it works with no training and no compile step.
-  - **YOLOv8** — one head ``[1, 4+nc, N]``. A custom ultralytics model
-    compiled with DRP-AI TVM (see CUSTOM_DRPAI_DETECTOR.md).
+  - **YOLOv8, decode cut off** ("yolov8-raw") — six raw feature maps, a box
+    and a class tensor per scale. This is how the custom ball model is built
+    for DRP-AI (``drpai/cut_yolov8_head.py``): the whole network runs on the
+    accelerator and the decode is done here in NumPy.
+  - **YOLOv8** — one decoded head ``[1, 4+nc, N]``, a straight ultralytics
+    export. Works, but its decode tail runs on the CPU in half precision and
+    costs as much as the network itself.
 
 - **A ``.tflite`` file** runs on the Cortex-A55 cores through LiteRT/XNNPACK.
   Supports the custom ultralytics YOLOv8 INT8 export (``model/ball_best.tflite``)
@@ -175,6 +180,8 @@ class YoloDetector:
                     f"unexpected YOLOv3 output shapes {[o.shape for o in outs]}")
         elif len(outs) == 1 and outs[0].ndim == 3:
             self._setup_yolov8(outs[0].shape)
+        elif len(outs) == 6 and all(o.ndim == 4 for o in outs):
+            self._setup_yolov8_raw(outs)
         else:
             raise RuntimeError(
                 f"unsupported DRP-AI model outputs {[o.shape for o in outs]}")
@@ -232,6 +239,35 @@ class YoloDetector:
         if self.nc < 1:
             raise RuntimeError(f"unexpected YOLOv8 output shape {list(shp)}")
 
+    def _setup_yolov8_raw(self, outs):
+        """Six feature maps from a YOLOv8 with its decode cut off: per scale
+        a box tensor [1, 4*reg_max, H, W] and a class tensor [1, nc, H, W].
+        The model's outputs come in a fixed order, so work out once which
+        output index is which."""
+        self.format = "yolov8-raw"
+        by_grid = {}
+        for i, o in enumerate(outs):
+            by_grid.setdefault(o.shape[2:], []).append((i, o.shape[1]))
+        self.raw_scales = []          # [(box_index, cls_index, H, W, stride)]
+        reg_max = nc = None
+        for (h, w), pair in sorted(by_grid.items(), reverse=True):
+            if len(pair) != 2:
+                raise RuntimeError(f"unexpected raw YOLOv8 outputs {[o.shape for o in outs]}")
+            # The box branch has 4 * reg_max = 64 channels; the other is classes.
+            (ia, ca), (ib, cb) = pair
+            if ca == 64 and cb != 64:
+                box, cls = (ia, ca), (ib, cb)
+            elif cb == 64 and ca != 64:
+                box, cls = (ib, cb), (ia, ca)
+            else:
+                raise RuntimeError(f"cannot tell box from class branch (channels {ca}, {cb})")
+            if reg_max not in (None, box[1] // 4) or nc not in (None, cls[1]):
+                raise RuntimeError("raw YOLOv8 scales disagree on channel counts")
+            reg_max, nc = box[1] // 4, cls[1]
+            self.raw_scales.append((box[0], cls[0], h, w, self.in_h / h))
+        self.reg_max, self.nc = reg_max, nc
+        self._dfl_bins = np.arange(reg_max, dtype=np.float32)
+
     def _setup_predecoded(self, outs):
         """Three pre-decoded outputs: boxes [1,N,4], scores [1,N], class_idx [1,N]."""
         self.format = "predecoded"
@@ -271,6 +307,8 @@ class YoloDetector:
             outs = self._drp.infer(blob)
             if self.format == "yolov3":
                 return self._decode_v3(outs, scale, dw, dh, h0, w0)
+            if self.format == "yolov8-raw":
+                return self._decode_v8_raw(outs, scale, dw, dh, h0, w0)
             return self._decode_v8(outs[0][0], scale, dw, dh, h0, w0)
 
         if self.in_dtype == np.float32:
@@ -362,6 +400,47 @@ class YoloDetector:
         cx, cy, bw, bh = boxes_xywh.T
         xyxy = np.stack([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2], axis=1)
         return self._finalize(xyxy, confs, cls_ids, scale, dw, dh, h0, w0)
+
+    def _decode_v8_raw(self, outs, scale, dw, dh, h0, w0):
+        """The Detect head's decode, in NumPy, on the six raw feature maps.
+
+        Class scores are thresholded first, as logits, so the DFL softmax
+        only runs on the handful of cells that might hold an object instead
+        of all 8400."""
+        logit_thres = float(np.log(self.conf_thres / (1.0 - self.conf_thres)))
+        all_xyxy, all_scores, all_cls = [], [], []
+        for box_i, cls_i, h, w, stride in self.raw_scales:
+            cls = outs[cls_i][0]                               # [nc, H, W]
+            if self.nc == 1:
+                best, cls_ids = cls[0], None
+            else:
+                cls_ids = cls.argmax(axis=0)
+                best = np.take_along_axis(cls, cls_ids[None], axis=0)[0]
+            ys, xs = np.nonzero(best >= logit_thres)
+            if len(ys) == 0:
+                continue
+            ids = (np.zeros(len(ys), dtype=np.int32) if cls_ids is None
+                   else cls_ids[ys, xs].astype(np.int32))
+            if self.class_ids is not None:
+                keep = np.isin(ids, list(self.class_ids))
+                ys, xs, ids = ys[keep], xs[keep], ids[keep]
+                if len(ys) == 0:
+                    continue
+            scores = _sigmoid(best[ys, xs])
+            # DFL: each side's distance is the expectation of a softmax over
+            # reg_max bins, in grid cells. [4*reg_max, n] -> [4, reg_max, n]
+            d = outs[box_i][0][:, ys, xs].reshape(4, self.reg_max, -1)
+            d = np.exp(d - d.max(axis=1, keepdims=True))
+            d = (d * self._dfl_bins[None, :, None]).sum(axis=1) / d.sum(axis=1)
+            cx, cy = xs + 0.5, ys + 0.5
+            all_xyxy.append(np.stack([(cx - d[0]) * stride, (cy - d[1]) * stride,
+                                      (cx + d[2]) * stride, (cy + d[3]) * stride], axis=1))
+            all_scores.append(scores)
+            all_cls.append(ids)
+        if not all_xyxy:
+            return []
+        return self._finalize(np.concatenate(all_xyxy), np.concatenate(all_scores),
+                              np.concatenate(all_cls), scale, dw, dh, h0, w0)
 
     def _decode_v3(self, outs, scale, dw, dh, h0, w0):
         """Darknet YOLOv3 heads [1, 3*(5+nc), S, S] -> boxes in input pixels."""
