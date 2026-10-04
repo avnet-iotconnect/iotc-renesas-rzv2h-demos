@@ -89,6 +89,23 @@ ACTION_LABELS = {
 
 HOME_POSITIONS = [[1, 365], [2, 503], [3, 300], [4, 900], [5, 750], [6, 500]]
 
+
+def _startup_pose():
+    """(pose, label) the arm takes when the app starts.
+
+    The first taught scan pose when there is one, so the arm goes straight to
+    where the demo works. HOME_POSITIONS is the park pose of the rig this
+    code was first written for — elbow folded right back over the base — and
+    is only the fallback (and the end pose of the scripted demo sequences)."""
+    try:
+        import scan_poses_store
+        poses, labels = scan_poses_store.load()
+        if poses:
+            return poses[0], f"scan pose '{labels[0]}'"
+    except Exception as e:
+        print(f"[main] could not load the taught scan poses: {e}")
+    return HOME_POSITIONS, "home"
+
 # Scripted demo sequences. Each item is (positions, duration_ms).
 # Every sequence must end at HOME_POSITIONS so the next action starts from a known pose.
 DEMO_SEQUENCES = {
@@ -1188,6 +1205,20 @@ class ShadowArm:
             self.getPosition(sid)
         return dict(self._shadow)
 
+    def getVoltage(self):
+        """Supply voltage as measured by the arm's controller, in volts, or
+        None. The controller sounds its buzzer when this drops below its
+        low-voltage alarm level, so it is logged around the heavy moments."""
+        try:
+            real = self._real
+            real._send(real.CMD_GET_BATTERY_VOLTAGE)
+            data = real._recv(real.CMD_GET_BATTERY_VOLTAGE)
+            if data is None or len(data) < 2:
+                return None
+            return round((data[0] | (data[1] << 8)) / 1000.0, 2)
+        except Exception:
+            return None
+
     def _flush_input(self):
         """Drop any replies still queued on the HID device."""
         try:
@@ -1677,9 +1708,10 @@ def main():
         else:
             print("IoTConnect is unavailable; running without cloud connectivity.")
 
-        print("Initializing to home position...")
-        arm.setPosition(HOME_POSITIONS, duration=2000, wait=True)
-        print("Home position reached!")
+        start_pose, start_label = _startup_pose()
+        print(f"Moving to the starting pose ({start_label})...")
+        arm.setPosition(start_pose, duration=2500, wait=True)
+        print(f"Starting pose reached. Arm supply: {arm.getVoltage()} V")
 
         # Supervisor loop. State is one of:
         #   'mode'       — running a vision mode in-process (camera active)

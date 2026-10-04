@@ -550,10 +550,25 @@ class BallFollowMode(Mode):
         print(f"[ball] gripper stalled at {actual} (target {GRIPPER_CLOSE_TARGET}); holding at full close")
         self.hold_target = actual
 
+        # Squeezing the ball at full torque while lifting is the arm's
+        # heaviest electrical load; log the supply so a low-voltage alarm
+        # (controller buzzer) can be matched to it.
+        volts = getattr(arm, "getVoltage", None)
+        v_squeeze = volts() if volts else None
         arm.setPosition([
             [SERVO_SHOULDER_LIFT, 300],
             [SERVO_ELBOW_FLEX, 350],
-        ], duration=1500, wait=True)
+        ], duration=1500, wait=False)
+        v_lift = []
+        t_end = time.time() + 1.5
+        while time.time() < t_end:
+            v = volts() if volts else None
+            if v:
+                v_lift.append(v)
+            time.sleep(0.05)
+        if v_squeeze or v_lift:
+            print(f"[ball] arm supply: {v_squeeze} V squeezing, "
+                  f"min {min(v_lift) if v_lift else None} V during the lift")
 
         # If the ball squirted out on the way up the jaws will have snapped
         # (nearly) shut. Catch that here rather than transporting an empty
