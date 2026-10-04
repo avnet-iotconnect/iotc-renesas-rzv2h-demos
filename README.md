@@ -227,6 +227,9 @@ and works with no cloud connection.
 The dashboard is shared with the Tria demo. Its GPU and memory-temperature
 widgets stay at 0 on the RZ/V2H, which has no such sensors.
 
+Building your own, or adding buttons? [DASHBOARD.md](DASHBOARD.md) lists every
+telemetry field worth showing and every command with its exact parameters.
+
 ---
 
 ## 4. Check everything before the arm moves
