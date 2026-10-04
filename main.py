@@ -1169,6 +1169,13 @@ class ShadowArm:
             return val
         except Exception as e:
             self._read_failures += 1
+            # A missed reply usually coincides with the controller sounding
+            # its buzzer, so record when, for which servo, and what the
+            # supply reads straight afterwards (capped to keep the log sane).
+            if self._read_failures <= 500:
+                print(f"[shadow] {time.strftime('%H:%M:%S')} servo {sid} read failed "
+                      f"({e}); supply now {self.getVoltage()} V "
+                      f"(failure #{self._read_failures})")
             # First failure logs the reason; subsequent failures are silent
             # to avoid flooding the log (the per-frame "[ball] position read
             # failed" line covers it for vision modes).
