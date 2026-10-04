@@ -15,7 +15,7 @@ The repo already ships a ball model trained on the reference ball
 > **Status of this guide.** The whole pipeline has been run end to end on the
 > reference rig. The DRP-AI ball model in this repo (`model/ball_drpai/`) was
 > built with steps 7–9: about 30 ms per detection on the board against about
-> 100 ms for the CPU model, and the ball found in 58 of 60 validation images
+> 100 ms for the CPU model, and the ball found in 59 of 60 validation images
 > against 47. Steps 1–5 (capture and labelling) are carried over from the Tria
 > demo; the reference dataset was captured there, not on this rig.
 
@@ -300,8 +300,9 @@ docker run --rm --shm-size=4g -v "$PWD:/w" -w /w ultralytics/ultralytics:latest-
 ```
 
 (`data.yaml`'s `path:` must be `/w/dataset` for this.) Expect about 13 minutes
-per epoch on a laptop CPU for 1,000 images; the reference model was taken
-after 6 epochs (mAP50 0.985). `scale=0.9` makes the augmentation zoom in as
+per epoch on a laptop CPU for 1,000 images; the reference model is the full
+40 epochs (mAP50 0.994, mAP50-95 0.939). A build from the weights after only
+6 epochs (mAP50 0.985) already found the ball in 58 of the 60 images. `scale=0.9` makes the augmentation zoom in as
 well as out, so the model also sees the ball as large as it looks just before
 a grab.
 

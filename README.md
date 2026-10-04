@@ -53,7 +53,7 @@ cross-compile. Any DRP-AI TVM model directory (`deploy.so` / `deploy.json` /
 
 | Order | Model | Runs on | Per detection (measured) | Ball found, 60 validation images | Notes |
 |---|---|---|---|---|---|
-| 1 | `model/ball_drpai/` — custom YOLOv8n compiled with DRP-AI TVM | **DRP-AI** | **~30 ms** (15 ms on the accelerator) | **58** | Bundled. What runs out of the box. How it was built: [CUSTOM_DRPAI_DETECTOR.md](CUSTOM_DRPAI_DETECTOR.md) |
+| 1 | `model/ball_drpai/` — custom YOLOv8n compiled with DRP-AI TVM | **DRP-AI** | **~30 ms** (15 ms on the accelerator) | **59** | Bundled. What runs out of the box. How it was built: [CUSTOM_DRPAI_DETECTOR.md](CUSTOM_DRPAI_DETECTOR.md) |
 | 2 | `model/ball_best.tflite` — custom YOLOv8n, INT8 | CPU (4× Cortex-A55) | ~100 ms | 47 | Bundled. The fallback, and the other half of the live comparison |
 | 3 | Stock COCO YOLOv3 from the AI SDK's R01 app | **DRP-AI** | ~48 ms | 13 | Already on the SD card. Uses COCO's `sports ball` class; fine as a runtime check, poor at this ball |
 
