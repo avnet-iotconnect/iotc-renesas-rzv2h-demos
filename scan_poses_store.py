@@ -29,10 +29,13 @@ DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # Hand-posing during teach_scan_pose almost always captures a closed claw
 # (the teach snapshot reads all six servos), which would make every scan
 # pose shut the jaws before the pickup. Force servo 1 open on save and load.
-# 60 = fully open — the same value the grab sequence commands right before
-# closing (see modes/ball_follow.py), so it's known-safe against the stop.
+# 130 = open, but short of the mechanical stop. On the RZ/V2H rig's arm the
+# jaws stop at ~107 (measured: commanded 60 or 0 they sit at 106-109), so the
+# old value of 60 held the gripper servo stalled against its stop for the
+# whole time the arm was searching. The grab sequence still opens fully (to
+# 0, for half a second) right before it closes on the ball.
 SERVO_GRIPPER = 1
-GRIPPER_SCAN_OPEN = 60
+GRIPPER_SCAN_OPEN = 130
 
 
 def load(path=DEFAULT_PATH):
