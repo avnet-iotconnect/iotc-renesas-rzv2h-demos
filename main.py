@@ -1152,20 +1152,49 @@ class ShadowArm:
         the answer to the next request. With the longer timeout patched in
         above the reply arrives in time; if a batched read fails anyway, the
         queue is flushed before falling back to single reads, so a stale
-        reply can't desynchronise the stream."""
-        servos = [xarm.Servo(i) for i in range(1, 7)]
+        reply can't desynchronise the stream.
+
+        The reply is parsed here, by servo id, instead of with the library's
+        getPosition(list): the controller sometimes answers for only five of
+        the six servos, and the library fills its list by position — every
+        joint after the missing one then gets its neighbour's value (and the
+        last keeps the Servo default of 500). A tracking step computed from
+        such a read throws the wrist/elbow hundreds of units for one frame."""
+        ids = list(range(1, 7))
+        pos = {}
         try:
-            self._real.getPosition(servos)
-            pos = {s.servo_id: int(s.position) for s in servos}
-            if len(pos) != 6:
-                raise ValueError(f"batched read returned {len(pos)} servos")
+            real = self._real
+            real._send(real.CMD_GET_SERVO_POSITION, bytearray([len(ids)] + ids))
+            data = real._recv(real.CMD_GET_SERVO_POSITION)
+            if data is None:
+                raise ValueError("no reply")
+            count = data[0]
+            if len(data) < 1 + 3 * count:
+                raise ValueError(f"short reply ({len(data)} bytes for {count} servos)")
+            for i in range(count):
+                sid = data[1 + 3 * i]
+                val = data[2 + 3 * i] | (data[3 + 3 * i] << 8)
+                # A servo that missed the bus poll can also come back as a
+                # wild value; real positions sit in (or just outside) 0..1000.
+                if sid in ids and val <= 1100:
+                    pos[sid] = val
         except Exception as e:
             self._batch_failures = getattr(self, "_batch_failures", 0) + 1
             if self._batch_failures in (1, 10, 100) or self._batch_failures % 1000 == 0:
                 print(f"[shadow] batched position read failed ({type(e).__name__}: {e}); "
                       f"flushing and reading servos one by one (failure #{self._batch_failures})")
             self._flush_input()
-            return {sid: int(self.getPosition(sid)) for sid in range(1, 7)}
+            return {sid: int(self.getPosition(sid)) for sid in ids}
+        missing = [sid for sid in ids if sid not in pos]
+        if missing:
+            # The reply itself arrived whole, so nothing is left in the queue:
+            # just ask again for the servo(s) it skipped.
+            self._partial_replies = getattr(self, "_partial_replies", 0) + 1
+            if self._partial_replies in (1, 10, 100) or self._partial_replies % 1000 == 0:
+                print(f"[shadow] batched position reply skipped servo(s) {missing}; "
+                      f"reading them singly (occurrence #{self._partial_replies})")
+            for sid in missing:
+                pos[sid] = int(self.getPosition(sid))
         self._shadow.update(pos)
         return pos
 
