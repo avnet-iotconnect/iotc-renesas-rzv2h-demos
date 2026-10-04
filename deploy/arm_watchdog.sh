@@ -1,23 +1,29 @@
 #!/bin/sh
 # Boot + recovery supervisor for the robotic-arm pick-and-place demo.
 #
-# Launches the app in IDLE: the arm connects, drives to its home pose and
-# IOTCONNECT comes up, then the arm holds still — no vision runs and nothing
-# else moves until an operator sends a start command from the cloud. This
-# keeps the arm safe on the table at power-up and after any hiccup.
+# Launches the app in BOOT_MODE as soon as the board is up and the arm is
+# attached. BOOT_MODE comes from the service unit (deploy/install_service.sh
+# [mode] writes it):
 #
-#   START movement:  set_mode  mode=yolo-pickplace     (from IOTCONNECT)
-#   STOP  movement:  set_mode  mode=idle   (or: stop_demo)
+#   yolo-pickplace (default)  the arm homes, then starts looking for balls
+#                             and moving them by itself — keep the table
+#                             clear of hands when the board powers up
+#   idle                      the arm homes and then holds still until an
+#                             operator sends  set_mode mode=yolo-pickplace
+#                             from IOTCONNECT
 #
-# The supervisor also: relaunches (into idle) when the xArm re-enumerates after
-# a USB drop, and relaunches (into idle) if the app dies while the arm is
-# healthy. Both recoveries return to the SAFE idle state, not to moving.
+# Either way the cloud can stop and start it:
+#   set_mode mode=idle  (or stop_demo)   |   set_mode mode=yolo-pickplace
+#
+# The supervisor also relaunches the app (in BOOT_MODE again) when the xArm
+# re-enumerates after a USB drop or a power cycle of the arm, and if the app
+# dies while the arm is attached.
 #
 # Pause the supervisor (e.g. to calibrate over SSH):  touch /tmp/demo_watchdog_off
 # Resume:                                              rm /tmp/demo_watchdog_off
 BASE="$(cd "$(dirname "$0")/.." && pwd)"
 LOG=/tmp/watchdog.log
-CONF=0.30          # YOLO confidence used once yolo-pickplace is started; edit to retune per venue
+BOOT_MODE="${BOOT_MODE:-yolo-pickplace}"
 STARTUP_GRACE=45   # seconds to let start.sh bring main.py up before the health check
                    # runs — prevents duplicate launches
 
@@ -56,39 +62,52 @@ wait_network() {
     log "not ready after 180s (DNS or clock unsynced) -> launching cloud-less (restart once synced)"
 }
 
-launch_idle() {
+wait_display() {
+    # The status screen needs Weston's Wayland socket; at power-up this
+    # service can be ready before the compositor is. Up to ~30s, then launch
+    # anyway (the app falls back to headless + web).
+    i=0
+    while [ "$i" -lt 15 ]; do
+        uid="$(id -u weston 2>/dev/null)"
+        [ -n "$uid" ] && [ -S "/run/user/$uid/wayland-1" ] && return 0
+        i=$((i + 1)); sleep 2
+    done
+    log "no Wayland socket after 30s -> launching without the HDMI screen"
+}
+
+launch_app() {
     wait_network
+    wait_display
     cd "$BASE" || return
-    # Render the annotated OpenCV window on the board's HDMI output (Weston /
-    # Wayland) whenever a vision mode runs, alongside the web stream on :8080.
-    # Without this main.py detects no display and forces headless. Harmless
-    # if Weston isn't up (the app just falls back to headless + web).
-    . "$BASE/deploy/display_env.sh"
-    YOLO_CONF="$CONF" nohup ./start.sh --mode idle --web-port 8080 \
+    # start.sh points the app at Weston (deploy/display_env.sh) so the status
+    # screen opens full screen on HDMI, alongside the web stream on :8080.
+    # Detector backend and confidence come from yolo_config.json (set from
+    # the cloud with set_backend / set_yolo_conf), so they survive a reboot.
+    nohup ./start.sh --mode "$BOOT_MODE" --web-port 8080 \
         > /tmp/yolo.log 2>&1 < /dev/null &
-    log "launched app in IDLE (HDMI + web; send set_mode to start movement)"
+    log "launched app in mode $BOOT_MODE (HDMI + web)"
 }
 
 launched_for=""   # arm_id the running app was launched against ("" = none)
 dead_since=0
-log "supervisor started (idle-launch, CONF=$CONF)"
+log "supervisor started (boot mode: $BOOT_MODE)"
 while true; do
     if [ -f /tmp/demo_watchdog_off ]; then sleep 10; continue; fi
     arm=$(arm_id)
     if [ -n "$arm" ]; then
         if [ "$arm" != "$launched_for" ]; then
-            log "arm present as $arm (boot, replug or USB re-enumeration) -> (re)launching in idle"
+            log "arm present as $arm (boot, replug or USB re-enumeration) -> (re)launching"
             pkill -f 'python3 -u main.py'; sleep 3
             pkill -9 -f 'python3 -u main.py' 2>/dev/null; sleep 1
-            launch_idle
+            launch_app
             launched_for=$arm
             sleep "$STARTUP_GRACE"
         elif ! demo_running; then
             now=$(date +%s)
             [ "$dead_since" = 0 ] && dead_since=$now
             if [ $((now - dead_since)) -ge "$STARTUP_GRACE" ]; then
-                log "app not running with healthy arm -> launching idle"
-                launch_idle
+                log "app not running with the arm attached -> launching"
+                launch_app
                 dead_since=0
                 sleep "$STARTUP_GRACE"
             fi

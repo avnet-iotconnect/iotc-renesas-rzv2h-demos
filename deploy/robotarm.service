@@ -1,5 +1,5 @@
 [Unit]
-Description=Robotic Arm pick-and-place demo (idle-start, auto-recover)
+Description=Robotic Arm pick-and-place demo (start at power-up, auto-recover)
 After=network.target weston.service
 Wants=network-online.target
 
@@ -7,7 +7,10 @@ Wants=network-online.target
 Type=simple
 Environment=PATH=/usr/bin:/bin:/usr/sbin:/sbin
 Environment=HOME=/root
-# deploy/install_service.sh rewrites this path to wherever the repo lives.
+# What the arm does at power-up: yolo-pickplace (start moving balls) or idle
+# (hold still until started from IOTCONNECT). deploy/install_service.sh [mode]
+# rewrites this line, and the path below to wherever the repo lives.
+Environment=BOOT_MODE=yolo-pickplace
 ExecStart=/bin/sh /root/iotc-renesas-rzv2h-robotic-arm/deploy/arm_watchdog.sh
 Restart=always
 RestartSec=5

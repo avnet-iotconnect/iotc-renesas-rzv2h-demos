@@ -410,9 +410,16 @@ sh deploy/install_service.sh
 ```
 
 installs `robotarm.service`, which runs [`deploy/arm_watchdog.sh`](deploy/arm_watchdog.sh).
-The watchdog launches the app in **idle** and relaunches it if the arm
-re-enumerates on USB or the app dies. Start and stop the pick-and-place from
-the cloud with `set_mode mode=yolo-pickplace` and `set_mode mode=idle`.
+From then on, powering the board up starts the demo: once the network, the
+clock and the HDMI compositor are ready the arm homes and **starts looking for
+balls and moving them by itself** — keep hands off the table at power-up. The
+watchdog also relaunches the app if the arm re-enumerates on USB (for example
+after the arm's own power was cycled) or the app dies.
+
+To have the arm home and then hold still until an operator starts it from the
+cloud instead, install with `sh deploy/install_service.sh idle`. In either
+case `set_mode mode=idle` and `set_mode mode=yolo-pickplace` from /IOTCONNECT
+stop and start the pick-and-place.
 
 Pause it while you calibrate over SSH: `touch /tmp/demo_watchdog_off`
 (resume: `rm /tmp/demo_watchdog_off`).
