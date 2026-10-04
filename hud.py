@@ -74,12 +74,13 @@ def compose(frame, info):
     """Build the HDMI picture.
 
     ``info`` keys (all optional): mode, state, backend ('DRP-AI' | 'CPU'),
-    yolo_ms, fps, cloud (bool), stats (demo_stats.snapshot()).
+    yolo_ms, fps, cloud (bool), stats (demo_stats.snapshot()), arm_fault
+    (bool: the servos are not answering).
     """
     global _panel, _panel_key, _panel_at
     st = info.get("stats") or {}
     key = (info.get("mode"), info.get("state"), info.get("backend"), info.get("cloud"),
-           st.get("drops"), st.get("grab_attempts"))
+           st.get("drops"), st.get("grab_attempts"), info.get("arm_fault"))
     now = time.time()
     if _panel is None or key != _panel_key or now - _panel_at >= PANEL_REFRESH_S:
         _panel = _draw_panel(info)[:, PANEL_X:].copy()
@@ -88,6 +89,16 @@ def compose(frame, info):
     canvas[:, :VIDEO_W] = cv2.resize(frame, (VIDEO_W, H), interpolation=cv2.INTER_LINEAR)
     canvas[:, PANEL_X:] = _panel
     cv2.line(canvas, (VIDEO_W, 0), (VIDEO_W, H), RULE, 2)
+    if info.get("arm_fault"):
+        # The arm's controller answers on USB but the servos do not: say so
+        # across the picture, because from the outside it just looks as if
+        # the demo never started.
+        cv2.rectangle(canvas, (0, _px(250)), (VIDEO_W, _px(430)), (40, 40, 200), -1)
+        cv2.putText(canvas, "ARM NOT RESPONDING", (_px(60), _px(335)), _BOLD,
+                    1.9 * K, WHITE, max(1, int(round(3 * K))), cv2.LINE_AA)
+        cv2.putText(canvas, "check the arm's power switch and the servo cable",
+                    (_px(60), _px(395)), _FONT, 0.95 * K, WHITE,
+                    max(1, int(round(2 * K))), cv2.LINE_AA)
     return canvas
 
 

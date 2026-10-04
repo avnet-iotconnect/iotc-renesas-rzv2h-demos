@@ -1156,12 +1156,29 @@ class ShadowArm:
             self._flush_input()
         raise ValueError(f"reply was for servo {data[1]}, not {sid}")
 
+    # After this many position reads in a row with no answer, the arm is
+    # treated as not responding (servo power off, or the servo cable out of
+    # the controller): the status screen says so, and real reads are only
+    # retried every SILENT_PROBE_S so the loop is not held up by a 500 ms
+    # timeout on every read.
+    SILENT_AFTER = 8
+    SILENT_PROBE_S = 2.0
+
+    @property
+    def arm_silent(self):
+        return getattr(self, "_consec_failures", 0) >= self.SILENT_AFTER
+
     def getPosition(self, sid):
         sid = int(sid)
+        if self.arm_silent and time.time() < getattr(self, "_next_probe_at", 0.0):
+            return self._shadow.get(sid, 500)
         try:
             val = self._read_one(sid)
             self._shadow[sid] = val
             self._read_successes += 1
+            if self.arm_silent:
+                print(f"[shadow] {time.strftime('%H:%M:%S')} the arm is answering again")
+            self._consec_failures = 0
             if self._reads_were_dead:
                 print(f"[shadow] reads recovered (servo {sid} = {val} after "
                       f"{self._read_failures} failures)")
@@ -1169,6 +1186,17 @@ class ShadowArm:
             return val
         except Exception as e:
             self._read_failures += 1
+            was_silent = self.arm_silent
+            self._consec_failures = getattr(self, "_consec_failures", 0) + 1
+            if self.arm_silent:
+                self._next_probe_at = time.time() + self.SILENT_PROBE_S
+                if not was_silent:
+                    print(f"[shadow] {time.strftime('%H:%M:%S')} the arm is NOT RESPONDING: "
+                          f"{self._consec_failures} position reads in a row unanswered "
+                          f"(controller supply {self.getVoltage()} V). Servo power off, or "
+                          f"the servo cable out of the controller? Retrying every "
+                          f"{self.SILENT_PROBE_S:g} s.")
+                return self._shadow.get(sid, 500)
             # A missed reply usually coincides with the controller sounding
             # its buzzer, so record when, for which servo, and what the
             # supply reads straight afterwards (capped to keep the log sane).
@@ -1492,9 +1520,10 @@ def pad_for_display(img, aspect=16 / 9):
                               cv2.BORDER_CONSTANT, value=(0, 0, 0))
 
 
-def _hud_info(mode, fps):
+def _hud_info(mode, fps, arm=None):
     """What the HDMI status panel shows for the running mode."""
     info = {
+        "arm_fault": bool(getattr(arm, "arm_silent", False)),
         "mode": mode.name,
         "state": mode.get_state(),
         "fps": fps,
@@ -1602,7 +1631,7 @@ def run_mode(arm, mode, camera_index=2, frame_w=640, frame_h=480,
                 display = frame
 
             if screen is not None:
-                screen.show(display, _hud_info(mode, hud_fps))
+                screen.show(display, _hud_info(mode, hud_fps, arm))
                 if screen.quit_requested:
                     break
 
