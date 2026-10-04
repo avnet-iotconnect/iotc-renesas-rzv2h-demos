@@ -43,6 +43,12 @@ GRAB_DEPTH_PATH = os.path.join(
 DEPTH_TOL_FLOOR = 20.0
 DEPTH_TOL_MULT = 1.5
 
+# Joints read from the arm on every tracking frame (the ones the tracker
+# steers). Gripper and wrist roll are not moved while tracking, so their last
+# known values are used.
+TRACK_JOINTS = (bf.SERVO_WRIST_FLEX, bf.SERVO_ELBOW_FLEX,
+                bf.SERVO_SHOULDER_LIFT, bf.SERVO_SHOULDER_PAN)
+
 # Pan-command cooldown (ms). The shoulder_pan bus servo has MIN_TRIM_STEP_PAN=18
 # (anything smaller stalls on static friction), but each 18-unit pan moves the
 # ball ~120-200 px in the image — *more* at close range where pixels-per-servo-
@@ -50,6 +56,15 @@ DEPTH_TOL_MULT = 1.5
 # rate (~30 Hz), the servo never finishes one move before the next retarget,
 # and the ball oscillates across the deadband. 250 ms ~ one move duration.
 PAN_COOLDOWN_MS = 250
+# Minimum spacing (ms) between tracking commands. A bus servo that is given a
+# new "current position + small step" target before the previous step has
+# finished starts over from standstill each time and, for the 14-15 unit
+# steps used here, barely moves at all: at the ~11 fps the DRP-AI model
+# allows, the wrist crept 2-3 units in several seconds while being commanded
+# -14 on every frame. So let each step (MOVE_DURATION_MS) finish, plus a
+# little settling so the next decision is made on a frame taken after the
+# move, before sending another. Frames in between still update the grab gate.
+TRACK_CMD_INTERVAL_MS = 300
 # Optional: latch centered_ok for N frames after it first becomes true so the
 # grab can fire on a frame where pan has just bounced out of the deadband, as
 # long as depth is also OK. Set to 0 (off) by default — found in live testing
@@ -99,6 +114,7 @@ class YoloBallFollowMode(BallFollowMode):
         # Anti-oscillation state for the close-range grab approach (see the
         # PAN_COOLDOWN_MS and CENTERED_LATCH_FRAMES constants up top).
         self._last_pan_at = 0.0
+        self._last_cmd_at = 0.0
         self._centered_streak = 0
         # Consecutive frames depth_ok has been true (DEPTH_SETTLE_FRAMES gate).
         self._depth_settle = 0
@@ -107,6 +123,14 @@ class YoloBallFollowMode(BallFollowMode):
         self._depth_ms_ewma = 0.0
         self._frame_ms_ewma = 0.0
         self._last_frame_t = None
+        # TRACK_TRACE=<file>: one line per frame (time, state, ball, joint
+        # positions, commanded deltas) for tuning the tracking controller.
+        self._trace_f = None
+        if os.environ.get("TRACK_TRACE"):
+            try:
+                self._trace_f = open(os.environ["TRACK_TRACE"], "a", buffering=1)
+            except OSError as e:
+                print(f"[yolo-ball] cannot open TRACK_TRACE file: {e}")
         # Taught reference from teach_grab_depth.py — D_grab feeds telemetry,
         # ball_r_at_grab is the auto radius target for the radius gate.
         self.r_grab_taught = None
@@ -142,6 +166,16 @@ class YoloBallFollowMode(BallFollowMode):
             if d is not None:
                 d.close()
 
+    def _trace(self, pos, ball=None, deltas=(0, 0, 0, 0), note=""):
+        if self._trace_f is None:
+            return
+        bx, by, br = ball if ball is not None else (-1, -1, -1)
+        self._trace_f.write(
+            f"{time.time():.3f} {self.state} ball={int(bx)},{int(by)},{int(br)} "
+            f"flex={pos[bf.SERVO_WRIST_FLEX]} elbow={pos[bf.SERVO_ELBOW_FLEX]} "
+            f"lift={pos[bf.SERVO_SHOULDER_LIFT]} pan={pos[bf.SERVO_SHOULDER_PAN]} "
+            f"d={deltas[0]},{deltas[1]},{deltas[2]},{deltas[3]} nb={self.no_ball_frames} {note}\n")
+
     def _detect_ball(self, frame):
         """Return (cx, cy, r) for the nearest (largest) ball, or None."""
         dets = self.detector.detect(frame)
@@ -158,19 +192,20 @@ class YoloBallFollowMode(BallFollowMode):
         cx_target = w // 2 + bf.CAM_GRIPPER_OFFSET_X
         cy_target = h // 2 + bf.CAM_GRIPPER_OFFSET_Y
 
-        # Reading the servo positions costs ~30 ms on the RZ/V2H even as one
-        # batched request (the arm's controller answers on a ~20 ms tick) —
-        # comparable to a DRP-AI inference. While tracking, do the two at the
-        # same time: the read runs on a helper thread while this thread runs
-        # YOLO. Both release the GIL, and nothing else touches the arm until
-        # the join below, so the HID stream still only ever has one user.
+        # Reading servo positions costs up to ~20 ms per servo on the RZ/V2H
+        # (the arm's controller answers on a ~20 ms tick) — more than a
+        # DRP-AI inference. While tracking, read only the four joints the
+        # tracker steers, and do it at the same time as the inference: the
+        # reads run on a helper thread while this thread runs YOLO. Both
+        # release the GIL, and nothing else touches the arm until the join
+        # below, so the HID stream still only ever has one user.
         early_detect = None
         if self.hold_target is None:
             box = {}
 
             def _read():
                 try:
-                    box["pos"] = bf._read_all_positions(arm)
+                    box["pos"] = bf._read_all_positions(arm, TRACK_JOINTS)
                 except Exception as e:
                     box["err"] = e
 
@@ -266,6 +301,7 @@ class YoloBallFollowMode(BallFollowMode):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
             self.state = "SCANNING"
             self.last_is_prediction = False
+            self._trace(pos)
             if self.no_ball_frames >= bf.NO_BALL_GRACE_FRAMES:
                 now = time.time()
                 next_advance_at = self.last_scan_move_at + (bf.SCAN_MOVE_MS / 1000.0) + bf.SCAN_DWELL_S
@@ -406,6 +442,7 @@ class YoloBallFollowMode(BallFollowMode):
 
         if not is_prediction and centered_latched and grab_gate_ok:
             self.state = "GRABBING"
+            self._trace(pos, ball, note="GRAB")
             self._log("GRAB: centered and at distance — closing gripper")
             self.state = "HOLDING" if self._do_grab(arm) else "TRACKING"
             try:
@@ -419,6 +456,9 @@ class YoloBallFollowMode(BallFollowMode):
             return annotated
 
         self.state = "PREDICTING" if is_prediction else "TRACKING"
+        if (time.time() * 1000.0 - self._last_cmd_at) < TRACK_CMD_INTERVAL_MS:
+            self._trace(pos, ball, note="wait")
+            return annotated
         d_pan = 0
         d_tilt = 0
         d_lift = 0
@@ -450,6 +490,8 @@ class YoloBallFollowMode(BallFollowMode):
                 if d_tilt == 0 and tilt_err != 0:
                     d_tilt = int(round(bf._step_toward(tilt_err, bf.TILT_GAIN, bf.MAX_STEP))) * bf.TILT_DIR
 
+        self._trace(pos, ball, (d_pan, d_tilt, d_lift, d_elbow),
+                    note="pred" if is_prediction else "")
         if d_pan == 0 and d_tilt == 0 and d_lift == 0 and d_elbow == 0:
             return annotated
 
@@ -469,6 +511,7 @@ class YoloBallFollowMode(BallFollowMode):
             self._log(f"{self.state}: dpan={d_pan} dtilt={d_tilt} dlift={d_lift} delbow={d_elbow}")
             try:
                 arm.setPosition(targets, duration=bf.MOVE_DURATION_MS, wait=False)
+                self._last_cmd_at = time.time() * 1000.0
             except Exception as e:
                 print(f"[yolo-ball] setPosition failed: {e}")
         t_arm = time.perf_counter() - t_arm_start

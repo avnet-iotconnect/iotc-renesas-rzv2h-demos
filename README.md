@@ -61,13 +61,24 @@ cross-compile. Any DRP-AI TVM model directory (`deploy.so` / `deploy.json` /
 first two while the demo runs; the HDMI screen shows which one is active and
 its inference time.
 
-**Loop rate.** With the arm attached the control loop runs at about **10 fps
-(up to 12) on the DRP-AI ball model** and about **6 fps on the CPU model**
-(measured). Detection is no longer the limit on DRP-AI: reading the six servo
-positions is. The arm's controller answers one request per ~20 ms tick, so the
-positions are read in one batched request (usually 15–30 ms, with an occasional
-200 ms stall) on a helper thread while YOLO runs, and the HDMI screen is drawn
-by a separate process. The first port, before any of that, ran at 3.5 fps.
+**Loop rate.** With the arm attached the control loop runs at about **11 fps
+on the DRP-AI ball model** (measured). Detection is no longer the limit on
+DRP-AI: reading the servo positions is. The arm's controller answers one
+request per ~20 ms tick, so only the four joints the tracker steers are read
+(~70 ms), on a helper thread while YOLO runs, and the HDMI screen is drawn by a
+separate process. The first port, before any of that, ran at 3.5 fps.
+
+The servos are read **one per request, on purpose**. Asking the controller for
+all six in one request is faster but unsafe while move commands are flowing:
+about one reply in ten came back late and incomplete, and shortly afterwards
+the controller executed a move nobody sent (the shoulder pan swung 30–40° to
+another joint's target). See `ShadowArm.getPositions()` in `main.py`.
+
+Tracking commands are spaced 300 ms apart (`TRACK_CMD_INTERVAL_MS`) so each
+small servo step finishes before the next: a bus servo that is re-targeted on
+every frame at 11 fps barely moves. The frames in between still feed the grab
+gate. `TRACK_TRACE=/tmp/track.txt ./start.sh` writes one line per frame (ball,
+joint positions, commanded steps) for tuning.
 
 To force a specific model: `YOLO_MODEL=/home/weston/R01_object_detection/exe_v2h/yolov3_onnx ./start.sh`.
 

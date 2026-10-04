@@ -1119,10 +1119,31 @@ class ShadowArm:
             pass
         return self._real.setPosition(*args, **kwargs)
 
+    def _read_one(self, sid):
+        """One servo's position, with the reply checked against the servo id
+        that was asked for. A reply for a different servo means an old answer
+        was still queued: drop the queue and ask once more."""
+        real = self._real
+        for attempt in (0, 1):
+            real._send(real.CMD_GET_SERVO_POSITION, bytearray([1, sid]))
+            data = real._recv(real.CMD_GET_SERVO_POSITION)
+            if data is None or len(data) < 4:
+                raise ValueError("no reply")
+            if data[0] == 1 and data[1] == sid:
+                val = data[2] | (data[3] << 8)
+                if val >= 0x8000:       # a few units below 0 arrive as 65xxx
+                    val -= 0x10000
+                if not -150 <= val <= 1150:
+                    raise ValueError(f"implausible position {val}")
+                return val
+            self._flush_input()
+        raise ValueError(f"reply was for servo {data[1]}, not {sid}")
+
     def getPosition(self, sid):
+        sid = int(sid)
         try:
-            val = self._real.getPosition(sid)
-            self._shadow[int(sid)] = int(val)
+            val = self._read_one(sid)
+            self._shadow[sid] = val
             self._read_successes += 1
             if self._reads_were_dead:
                 print(f"[shadow] reads recovered (servo {sid} = {val} after "
@@ -1139,64 +1160,33 @@ class ShadowArm:
                       f"falling back to commanded shadow positions. "
                       f"Writes still go through; closed-loop correction is off.")
                 self._reads_were_dead = True
-            return self._shadow.get(int(sid), 500)
+            return self._shadow.get(sid, 500)
 
-    def getPositions(self):
-        """All six positions in ONE request. Returns {servo_id: position}.
+    def getPositions(self, ids=None):
+        """Positions as {servo_id: position} for all six servos. Only the
+        servos in ``ids`` (default: all) are actually read — one request
+        each, ~6-20 ms apiece; the rest come from the shadow (last value
+        read or commanded), so a caller that only steers four joints does
+        not pay for six reads.
 
-        The controller answers a request roughly every 20 ms however much
-        was asked, so six single reads cost ~130 ms on the RZ/V2H and one
-        batched read ~32 ms. The stock library cannot do this — the reply
-        takes longer than its 50 ms read timeout, the parse then raises and
-        the late reply is left in the HID queue, where it is mistaken for
-        the answer to the next request. With the longer timeout patched in
-        above the reply arrives in time; if a batched read fails anyway, the
-        queue is flushed before falling back to single reads, so a stale
-        reply can't desynchronise the stream.
-
-        The reply is parsed here, by servo id, instead of with the library's
-        getPosition(list): the controller sometimes answers for only five of
-        the six servos, and the library fills its list by position — every
-        joint after the missing one then gets its neighbour's value (and the
-        last keeps the Servo default of 500). A tracking step computed from
-        such a read throws the wrist/elbow hundreds of units for one frame."""
-        ids = list(range(1, 7))
-        pos = {}
-        try:
-            real = self._real
-            real._send(real.CMD_GET_SERVO_POSITION, bytearray([len(ids)] + ids))
-            data = real._recv(real.CMD_GET_SERVO_POSITION)
-            if data is None:
-                raise ValueError("no reply")
-            count = data[0]
-            if len(data) < 1 + 3 * count:
-                raise ValueError(f"short reply ({len(data)} bytes for {count} servos)")
-            for i in range(count):
-                sid = data[1 + 3 * i]
-                val = data[2 + 3 * i] | (data[3 + 3 * i] << 8)
-                # A servo that missed the bus poll can also come back as a
-                # wild value; real positions sit in (or just outside) 0..1000.
-                if sid in ids and val <= 1100:
-                    pos[sid] = val
-        except Exception as e:
-            self._batch_failures = getattr(self, "_batch_failures", 0) + 1
-            if self._batch_failures in (1, 10, 100) or self._batch_failures % 1000 == 0:
-                print(f"[shadow] batched position read failed ({type(e).__name__}: {e}); "
-                      f"flushing and reading servos one by one (failure #{self._batch_failures})")
-            self._flush_input()
-            return {sid: int(self.getPosition(sid)) for sid in ids}
-        missing = [sid for sid in ids if sid not in pos]
-        if missing:
-            # The reply itself arrived whole, so nothing is left in the queue:
-            # just ask again for the servo(s) it skipped.
-            self._partial_replies = getattr(self, "_partial_replies", 0) + 1
-            if self._partial_replies in (1, 10, 100) or self._partial_replies % 1000 == 0:
-                print(f"[shadow] batched position reply skipped servo(s) {missing}; "
-                      f"reading them singly (occurrence #{self._partial_replies})")
-            for sid in missing:
-                pos[sid] = int(self.getPosition(sid))
-        self._shadow.update(pos)
-        return pos
+        Do NOT turn this into one multi-servo request. That was tried on the
+        RZ/V2H (one request is ~14 ms instead of ~20 ms per servo) and is
+        unsafe with this controller while move commands are flowing:
+          * about one reply in ten arrives ~200 ms late and answers for only
+            five servos (the xarm library then assigns values by position,
+            so the joints get each other's readings), and
+          * shortly after such a reply the controller executes a move nobody
+            sent — the shoulder pan swung 30-40 degrees to the target that
+            had just been commanded for the shoulder lift or the wrist. The
+            bytes of the multi-servo request (count, 1, 2, 3, 4, 5, 6) line
+            up with the servo-id slots of a move command, and the controller
+            evidently mixes the two.
+        Single-servo requests are what the arm vendor's tools use and showed
+        neither fault."""
+        ids = range(1, 7) if ids is None else ids
+        for sid in ids:
+            self.getPosition(sid)
+        return dict(self._shadow)
 
     def _flush_input(self):
         """Drop any replies still queued on the HID device."""

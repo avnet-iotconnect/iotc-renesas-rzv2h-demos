@@ -141,20 +141,19 @@ HOME_POSE_KEEP_GRIP = [[s, 500] for s in range(2, 7)]
 _ALL_SERVOS = [Servo(i) for i in range(1, 7)]
 
 
-def _read_all_positions(arm):
-    """All six servo positions. Returns {id: pos}.
+def _read_all_positions(arm, ids=None):
+    """All six servo positions as {id: pos}.
 
-    Uses the arm wrapper's batched read when it has one (main.ShadowArm
-    .getPositions — one request, with a flush-and-fall-back if it fails).
-    The raw ``arm.getPosition([Servo...])`` call of the xarm library must
-    NOT be used directly: when its reply misses the library's 50 ms timeout
-    the parse throws IndexError and the late reply stays in the HID read
-    queue, desynchronising every later read until the process restarts.
-    Arms without the wrapper get per-servo reads (~20 ms each).
+    With the arm wrapper (main.ShadowArm.getPositions) only the servos in
+    ``ids`` are read from the arm — one request each — and the others come
+    from its shadow; pass the joints you steer to keep the per-frame cost
+    down. Multi-servo requests (``arm.getPosition([Servo...])`` of the xarm
+    library) must NOT be used: see ShadowArm.getPositions for what they do
+    to this controller.
     """
     batched = getattr(arm, "getPositions", None)
     if batched is not None:
-        return batched()
+        return batched(ids)
     return {sid: int(arm.getPosition(sid)) for sid in range(1, 7)}
 
 
