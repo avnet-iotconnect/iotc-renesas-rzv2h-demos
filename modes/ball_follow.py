@@ -534,7 +534,19 @@ class BallFollowMode(Mode):
         # wait=True only sleeps for the commanded duration; closing on the
         # ball the servo runs slower than that, so poll until the jaws have
         # actually stopped before deciding where they stalled and lifting.
-        actual = self._wait_gripper_settled(arm)
+        # Some arms move on command but never report positions (see
+        # main.ShadowArm.arm_silent). Without the gripper's position there is
+        # no way to tell a ball in the jaws from empty jaws, so give them
+        # time to close and carry on as if the ball is held: a miss then
+        # costs one empty trip to the box instead of stopping the demo.
+        no_feedback = bool(getattr(arm, "arm_silent", False))
+        if no_feedback:
+            time.sleep(1.0)
+            actual = GRIPPER_CLOSE_TARGET - 2 * GRIPPER_STALL_SLACK
+            print("[ball] no position feedback from the arm - cannot confirm the grip; "
+                  "assuming the ball is held")
+        else:
+            actual = self._wait_gripper_settled(arm)
         if actual >= GRIPPER_CLOSE_TARGET - GRIPPER_STALL_SLACK:
             print(f"[ball] gripper closed to {actual} — nothing in the jaws; back to tracking")
             arm.setPosition(SERVO_GRIPPER, GRIPPER_TRACK_POS, duration=300, wait=True)
@@ -576,11 +588,11 @@ class BallFollowMode(Mode):
         # on a held ball for a couple of seconds, so "closed further than the
         # stall" is normal and does NOT mean the ball is gone.
         try:
-            after = int(arm.getPosition(SERVO_GRIPPER))
+            after = actual if no_feedback else int(arm.getPosition(SERVO_GRIPPER))
         except Exception as e:
             print(f"[ball] gripper read after lift failed: {e}")
             after = actual
-        if after >= GRIPPER_EMPTY_POS:
+        if after >= GRIPPER_EMPTY_POS and not no_feedback:
             print(f"[ball] ball slipped during lift: gripper {actual} -> {after}; back to tracking")
             self.hold_target = None
             arm.setPosition(SERVO_GRIPPER, GRIPPER_TRACK_POS, duration=300, wait=True)

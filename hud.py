@@ -90,15 +90,16 @@ def compose(frame, info):
     canvas[:, PANEL_X:] = _panel
     cv2.line(canvas, (VIDEO_W, 0), (VIDEO_W, H), RULE, 2)
     if info.get("arm_fault"):
-        # The arm's controller answers on USB but the servos do not: say so
-        # across the picture, because from the outside it just looks as if
-        # the demo never started.
-        cv2.rectangle(canvas, (0, _px(250)), (VIDEO_W, _px(430)), (40, 40, 200), -1)
-        cv2.putText(canvas, "ARM NOT RESPONDING", (_px(60), _px(335)), _BOLD,
-                    1.9 * K, WHITE, max(1, int(round(3 * K))), cv2.LINE_AA)
-        cv2.putText(canvas, "check the arm's power switch and the servo cable",
-                    (_px(60), _px(395)), _FONT, 0.95 * K, WHITE,
-                    max(1, int(round(2 * K))), cv2.LINE_AA)
+        # The arm's controller answers on USB but no servo reports its
+        # position. Either the arm is one that moves without feedback, or it
+        # is not moving at all (power, servo cable) - say which to check.
+        cv2.rectangle(canvas, (0, 0), (VIDEO_W, _px(64)), (30, 120, 220), -1)
+        cv2.putText(canvas, "NO POSITION FEEDBACK FROM THE ARM", (_px(16), _px(27)), _BOLD,
+                    0.8 * K, WHITE, max(1, int(round(2 * K))), cv2.LINE_AA)
+        cv2.putText(canvas, "grip is not verified. If the arm is not moving either, "
+                    "check its power switch and servo cable.",
+                    (_px(16), _px(53)), _FONT, 0.55 * K, WHITE,
+                    max(1, int(round(1 * K))), cv2.LINE_AA)
     return canvas
 
 

@@ -1191,11 +1191,12 @@ class ShadowArm:
             if self.arm_silent:
                 self._next_probe_at = time.time() + self.SILENT_PROBE_S
                 if not was_silent:
-                    print(f"[shadow] {time.strftime('%H:%M:%S')} the arm is NOT RESPONDING: "
+                    print(f"[shadow] {time.strftime('%H:%M:%S')} NO POSITION FEEDBACK from the arm: "
                           f"{self._consec_failures} position reads in a row unanswered "
-                          f"(controller supply {self.getVoltage()} V). Servo power off, or "
-                          f"the servo cable out of the controller? Retrying every "
-                          f"{self.SILENT_PROBE_S:g} s.")
+                          f"(controller supply {self.getVoltage()} V). Running on commanded "
+                          f"positions; the grip cannot be verified. If the arm is not moving "
+                          f"either: servo power off, or the servo cable out of the "
+                          f"controller? Retrying every {self.SILENT_PROBE_S:g} s.")
                 return self._shadow.get(sid, 500)
             # A missed reply usually coincides with the controller sounding
             # its buzzer, so record when, for which servo, and what the
