@@ -209,10 +209,20 @@ class _BallFollowExcludingBox(BallFollowMode):
 
 
 # Drop sequence
-GRIPPER_OPEN_POS = 60
+GRIPPER_OPEN_POS = 130         # open, but short of the jaws' mechanical stop (~110)
 TRANSPORT_DURATION_MS = 2000
 GRIPPER_OPEN_DURATION_MS = 500
 HOMING_DURATION_MS = 1800
+# The arm must hold still over the box until the ball has actually left the
+# jaws. A commanded duration is not when a servo arrives: after the 2 s
+# transport the arm is still settling, and the jaws take longer than their
+# 500 ms command to let go of a ball they were squeezing at full torque.
+# Leaving on the command timings alone swung the arm away while the ball was
+# still coming out, throwing it wide of the box.
+DROP_SETTLE_S = 0.4            # after arriving over the box, before opening
+GRIPPER_RELEASED_POS = 300     # jaws read at/below this = the ball is free (they hold it at ~590)
+GRIPPER_OPEN_TIMEOUT_S = 2.5   # give up waiting for the jaws after this long
+DROP_FALL_S = 0.5              # once the jaws are open, let the ball fall clear
 # How far above the lock pose to release the ball. We *only* change
 # shoulder_lift (smaller = arm raised), which on this 6-DOF arm rotates the
 # whole assembly back and up — so a big lift offset doesn't just raise the
@@ -596,6 +606,7 @@ class PickPlaceMode(Mode):
         except Exception as e:
             print(f"[pickplace] transport failed: {e}")
             return
+        time.sleep(DROP_SETTLE_S)
         print("[pickplace] DROPPING")
         self.state = "DROPPING"
         try:
@@ -603,12 +614,41 @@ class PickPlaceMode(Mode):
                             duration=GRIPPER_OPEN_DURATION_MS, wait=True)
         except Exception as e:
             print(f"[pickplace] drop failed: {e}")
+        self._wait_gripper_open(arm)
+        time.sleep(DROP_FALL_S)
         print("[pickplace] HOMING")
         self.state = "HOMING"
         try:
-            arm.setPosition(HOME_POSE, duration=HOMING_DURATION_MS, wait=True)
+            # Keep the jaws open on the way back: HOME_POSE would start
+            # closing them again the moment the arm leaves the box.
+            arm.setPosition(HOME_POSE_KEEP_GRIP, duration=HOMING_DURATION_MS, wait=True)
         except Exception as e:
             print(f"[pickplace] home failed: {e}")
+
+    def _wait_gripper_open(self, arm):
+        """Hold still over the box until the jaws have really opened: poll the
+        gripper until it reads at/below GRIPPER_RELEASED_POS (or stops
+        moving), up to GRIPPER_OPEN_TIMEOUT_S. An arm that gives no position
+        feedback gets a fixed wait instead."""
+        if getattr(arm, "arm_silent", False):
+            time.sleep(1.0)
+            return
+        t0 = time.time()
+        trace = []
+        while time.time() - t0 < GRIPPER_OPEN_TIMEOUT_S:
+            try:
+                cur = int(arm.getPosition(SERVO_GRIPPER))
+            except Exception as e:
+                print(f"[pickplace] gripper read while opening failed: {e}")
+                break
+            trace.append(cur)
+            if cur <= GRIPPER_RELEASED_POS:
+                break
+            time.sleep(0.08)
+        else:
+            print(f"[pickplace] jaws still not open after {GRIPPER_OPEN_TIMEOUT_S}s")
+        print(f"[pickplace] jaws open after {time.time() - t0 + GRIPPER_OPEN_DURATION_MS / 1000.0:.1f}s "
+              f"(gripper {' '.join(map(str, trace[-6:]))})")
 
     def _save_box_pose(self, pose):
         try:
