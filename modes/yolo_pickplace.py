@@ -155,9 +155,9 @@ class YoloBallFollowMode(BallFollowMode):
     def setup(self, arm):
         # No ball_color.json — YOLO needs no HSV calibration. Just take up the
         # first scan pose like the parent does.
-        print(f"[yolo-ball] moving to scan pose [{self.scan_pose_labels[0]}]...")
-        arm.setPosition(self.scan_poses[0], duration=1500, wait=True)
-        self.scan_idx = 0
+        self.scan_idx = self.scan_start_idx
+        print(f"[yolo-ball] moving to scan pose [{self.scan_pose_labels[self.scan_idx]}]...")
+        arm.setPosition(self.scan_poses[self.scan_idx], duration=1500, wait=True)
         self.last_scan_move_at = time.time()
         self.state = "IDLE"
 
@@ -306,7 +306,7 @@ class YoloBallFollowMode(BallFollowMode):
                 now = time.time()
                 next_advance_at = self.last_scan_move_at + (bf.SCAN_MOVE_MS / 1000.0) + bf.SCAN_DWELL_S
                 if now >= next_advance_at:
-                    self.scan_idx = (self.scan_idx + 1) % len(self.scan_poses)
+                    self.scan_idx = self._advance_scan()
                     next_label = self.scan_pose_labels[self.scan_idx]
                     print(f"[yolo-ball] scanning -> {next_label}")
                     try:

@@ -101,7 +101,9 @@ def _startup_pose():
         import scan_poses_store
         poses, labels = scan_poses_store.load()
         if poses:
-            return poses[0], f"scan pose '{labels[0]}'"
+            names = [str(lab).lower() for lab in labels]
+            i = names.index("center") if "center" in names else len(poses) // 2
+            return poses[i], f"scan pose '{labels[i]}'"
     except Exception as e:
         print(f"[main] could not load the taught scan poses: {e}")
     return HOME_POSITIONS, "home"

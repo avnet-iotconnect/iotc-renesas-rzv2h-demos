@@ -215,7 +215,8 @@ class BallFollowMode(Mode):
         else:
             self.scan_poses = SCAN_POSES
             self.scan_pose_labels = SCAN_POSE_LABELS
-        self.scan_idx = 0
+        self._order_scan_poses()
+        self.scan_idx = self.scan_start_idx
         self.last_scan_move_at = 0.0
         # perf instrumentation (printed from process_frame every PERF_EVERY frames)
         self._perf_n = 0
@@ -231,11 +232,44 @@ class BallFollowMode(Mode):
         self.lower = np.array([cfg["h_min"], cfg["s_min"], cfg["v_min"]], dtype=np.uint8)
         self.upper = np.array([cfg["h_max"], cfg["s_max"], cfg["v_max"]], dtype=np.uint8)
         print(f"[ball] HSV range loaded: lower={self.lower.tolist()} upper={self.upper.tolist()}")
-        print(f"[ball] moving to scan pose [{self.scan_pose_labels[0]}]...")
-        arm.setPosition(self.scan_poses[0], duration=1500, wait=True)
-        self.scan_idx = 0
+        self.scan_idx = self.scan_start_idx
+        print(f"[ball] moving to scan pose [{self.scan_pose_labels[self.scan_idx]}]...")
+        arm.setPosition(self.scan_poses[self.scan_idx], duration=1500, wait=True)
         self.last_scan_move_at = time.time()
         self.state = "IDLE"
+
+    def _order_scan_poses(self):
+        """Put the scan poses in base-angle order and pick where to start.
+
+        The search sweeps them back and forth (see _advance_scan), so they
+        have to be in the order the base passes them, whatever order they
+        were taught or stored in. The sweep starts from the pose called
+        'center' when there is one, else from the middle of the arc."""
+        def pan(pose):
+            return next((p for sid, p in pose if sid == SERVO_SHOULDER_PAN), None)
+        pans = [pan(pose) for pose in self.scan_poses]
+        if all(p is not None for p in pans):
+            order = sorted(range(len(pans)), key=lambda i: pans[i])
+            self.scan_poses = [self.scan_poses[i] for i in order]
+            self.scan_pose_labels = [self.scan_pose_labels[i] for i in order]
+        labels = [str(lab).lower() for lab in self.scan_pose_labels]
+        self.scan_start_idx = (labels.index("center") if "center" in labels
+                               else len(labels) // 2)
+        self._scan_dir = 1
+
+    def _advance_scan(self):
+        """Index of the next scan pose: back and forth along the arc
+        (.., n-2, n-1, n-2, .., 1, 0, 1, ..), so every move is to a
+        neighbouring pose and the arm never swings across the whole search
+        arc in one go."""
+        n = len(self.scan_poses)
+        if n < 2:
+            return 0
+        nxt = self.scan_idx + self._scan_dir
+        if nxt < 0 or nxt >= n:
+            self._scan_dir = -self._scan_dir
+            nxt = self.scan_idx + self._scan_dir
+        return nxt
 
     def process_frame(self, frame, arm):
         from main import send_telemetry  # lazy to avoid circular import
@@ -344,7 +378,7 @@ class BallFollowMode(Mode):
                 now = time.time()
                 next_advance_at = self.last_scan_move_at + (SCAN_MOVE_MS / 1000.0) + SCAN_DWELL_S
                 if now >= next_advance_at:
-                    self.scan_idx = (self.scan_idx + 1) % len(self.scan_poses)
+                    self.scan_idx = self._advance_scan()
                     next_label = self.scan_pose_labels[self.scan_idx]
                     print(f"[ball] scanning -> {next_label}")
                     try:
