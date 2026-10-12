@@ -8,12 +8,13 @@
 # touched. Re-run it to update the board after a `git pull`.
 set -e
 BOARD="${1:?usage: deploy/push_to_board.sh <board-ip> [dest-dir]}"
-DEST="${2:-/root/iotc-renesas-rzv2h-robotic-arm}"
+DEST="${2:-/root/iotc-renesas-rzv2h-demos}"
 cd "$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 
 SSH_OPTS="-o StrictHostKeyChecking=accept-new"
 git ls-files -z --cached --others --exclude-standard \
     | tar --null -T - -cf - \
-    | ssh $SSH_OPTS "root@$BOARD" "mkdir -p '$DEST' && tar -xf - -C '$DEST' && chmod +x '$DEST'/*.sh '$DEST'/deploy/*.sh"
+    | ssh $SSH_OPTS "root@$BOARD" "mkdir -p '$DEST' && tar -xf - -C '$DEST' && find '$DEST' -name '*.sh' -exec chmod +x {} +"
 echo "Pushed to root@$BOARD:$DEST"
 echo "First time on this board? Run:  ssh root@$BOARD 'cd $DEST && bash setup_board.sh'"
+echo "Then: cd $DEST/robotic-arm (pick-and-place) or cd $DEST/pose-safety (pose demo)"

@@ -15,7 +15,7 @@ if [ "$1" = "--webrtc" ]; then
     python3 -m pip install -c constraints.txt -r requirements-webrtc.txt
 fi
 
-chmod +x ./*.sh deploy/*.sh 2>/dev/null || true
+find . -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 
 echo ""
 echo "=== Checking the board ==="

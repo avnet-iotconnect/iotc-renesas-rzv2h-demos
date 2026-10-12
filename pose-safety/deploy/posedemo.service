@@ -1,0 +1,21 @@
+[Unit]
+Description=DRP-AI human-pose operator-safety demo (start at power-up, auto-recover)
+# No After=weston.service: on the RZ/V2H image weston.service is itself ordered
+# after multi-user.target, so that would be an ordering cycle and systemd
+# would drop this service at boot. pose_boot.sh waits for Weston's socket.
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PATH=/usr/bin:/bin:/usr/sbin:/sbin
+Environment=HOME=/root
+# Extra arguments for pose_app.py (e.g. --web-port 8080 --no-cloud).
+# deploy/install_pose_service.sh rewrites this line and the path below.
+Environment=POSE_ARGS=--web-port 8080
+ExecStart=/bin/sh /root/iotc-renesas-rzv2h-demos/pose-safety/deploy/pose_boot.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

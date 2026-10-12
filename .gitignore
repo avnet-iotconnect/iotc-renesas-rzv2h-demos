@@ -34,10 +34,15 @@ grab_depth.json
 grab_threshold.json
 approach_limits.json
 yolo_config.json
+# Pose demo runtime state (created on the board on first run)
+pose_config.json
+pose_zone.json
+pose_camera_settings.json
 iotcDeviceConfig.json
 device-cert.pem
 device-pkey.pem
 run.log
+pose_run.log
 launch_gui.log
 calibrate.log
 calibrate_offset.log
@@ -58,13 +63,14 @@ runs/
 *.zip
 best.pt
 # ...except the bundled custom ball detector (CPU fallback), which ships in the repo
-!model/ball_best.tflite
+!robotic-arm/model/ball_best.tflite
 
-# DRP-AI TVM build inputs/outputs (drpai/ — see CUSTOM_DRPAI_DETECTOR.md).
+# DRP-AI TVM build inputs/outputs (common/drpai/ — see robotic-arm/CUSTOM_DRPAI_DETECTOR.md).
 # Renesas' installers are licensed downloads and must not be committed.
-drpai/downloads/*
-!drpai/downloads/README.md
-drpai/build/
-model/*_drpai/
+common/drpai/downloads/*
+!common/drpai/downloads/README.md
+common/drpai/build/
+# Compiled DRP-AI models are large and regenerable; each demo keeps them in its own model/
+*/model/*_drpai/
 # ...except the bundled DRP-AI ball detector
-!model/ball_drpai/
+!robotic-arm/model/ball_drpai/

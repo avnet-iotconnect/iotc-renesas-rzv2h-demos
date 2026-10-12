@@ -1,0 +1,624 @@
+{
+  "code": "poseV2H",
+  "name": "poseV2H",
+  "authType": 2,
+  "messageVersion": "2.1",
+  "capability": "0",
+  "enableCSR": "false",
+  "c2dOnDemand": 0,
+  "properties": {
+    "description": "Renesas RZ/V2H DRP-AI human-pose operator-safety demo",
+    "dataFrequency": "2",
+    "fileSupport": false,
+    "videoStreamResource": "2",
+    "videoStreamType": "2",
+    "autoStartVideoStream": false,
+    "certRenewalDay": 0,
+    "enableCSR": false
+  },
+  "_meta": {
+    "version": "2.0"
+  },
+  "attributes": [
+    {
+      "name": "state",
+      "displayName": "",
+      "type": "STRING",
+      "description": "NOBODY IN VIEW, TRACKING n, or the active alert.",
+      "unit": "",
+      "aggregateTypes": []
+    },
+    {
+      "name": "pose",
+      "displayName": "",
+      "type": "OBJECT",
+      "description": "Live pose-demo numbers: people, backend, inference time, flags.",
+      "attributeColor": "",
+      "aggregateTypes": [],
+      "childs": [
+        {
+          "name": "people",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "People in view this sample.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "backend",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Where pose inference runs: DRP-AI or CPU.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "infer_ms",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Pose inference time per frame (EWMA).",
+          "unit": "ms",
+          "attributeColor": ""
+        },
+        {
+          "name": "fps",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Camera-to-screen loop rate.",
+          "unit": "fps",
+          "attributeColor": ""
+        },
+        {
+          "name": "hands_up",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "1 while someone holds both hands above their head (stop gesture).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "hand_raised",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "1 while someone has a hand above the shoulder.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "person_down",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "1 while someone is lying / collapsed (torso near horizontal).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "zone_breach",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "1 while someone stands inside the hazard zone.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "zone_people",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "People inside the hazard zone.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "bending",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "1 while the main person bends past the posture limit.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "posture_angle",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Main person's torso lean from vertical (-1 = not visible).",
+          "unit": "deg",
+          "attributeColor": ""
+        },
+        {
+          "name": "reps",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Hands-up repetitions since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "conf_max",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Highest person confidence this sample.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "keypoints_visible",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Keypoints above the visibility threshold, all people.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "alert",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Active alert text, or empty.",
+          "unit": "",
+          "attributeColor": ""
+        }
+      ]
+    },
+    {
+      "name": "events",
+      "displayName": "",
+      "type": "OBJECT",
+      "description": "Counters since the app started.",
+      "attributeColor": "",
+      "aggregateTypes": [],
+      "childs": [
+        {
+          "name": "zone_breaches",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Hazard-zone entries since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "falls",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Person-down alerts since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "hands_up",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Stop gestures since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "reps",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Hands-up repetitions since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "max_people",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Most people seen at once since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "uptime_min",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Minutes since the app started.",
+          "unit": "min",
+          "attributeColor": ""
+        }
+      ]
+    },
+    {
+      "name": "config",
+      "displayName": "",
+      "type": "OBJECT",
+      "description": "Current runtime configuration.",
+      "attributeColor": "",
+      "aggregateTypes": [],
+      "childs": [
+        {
+          "name": "backend",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Configured backend: drpai or cpu.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "conf",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Person confidence threshold.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "zone",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Hazard zone polygon, normalized x,y pairs, or 'clear'.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "telemetry_s",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Telemetry interval.",
+          "unit": "s",
+          "attributeColor": ""
+        },
+        {
+          "name": "camera",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Camera device and resolution.",
+          "unit": "",
+          "attributeColor": ""
+        }
+      ]
+    },
+    {
+      "name": "sysInfo_system",
+      "displayName": "",
+      "type": "OBJECT",
+      "description": "Static hardware/OS identification plus host identity and uptime.",
+      "attributeColor": "",
+      "childs": [
+        {
+          "name": "hostname",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Device hostname.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "uptime",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Human-readable system uptime since boot.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "cpu_brand",
+          "displayName": "",
+          "type": "STRING",
+          "description": "CPU brand string (e.g. Cortex-A55).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "cpu_vendor",
+          "displayName": "",
+          "type": "STRING",
+          "description": "CPU vendor (e.g. ARM).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "cpu_mhz",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Advertised clock speed in MHz.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "cpu_physical_cores",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Physical core count.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "architecture",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Machine architecture (e.g. aarch64).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "system",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Operating system name (e.g. Linux).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "release",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Kernel release string.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "platform",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Full platform descriptor.",
+          "unit": "",
+          "attributeColor": ""
+        }
+      ],
+      "aggregateTypes": []
+    },
+    {
+      "name": "sysInfo_cpu",
+      "displayName": "",
+      "type": "OBJECT",
+      "description": "CPU utilization, temperature, and the top CPU-consuming process.",
+      "attributeColor": "",
+      "childs": [
+        {
+          "name": "usage_percent",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Overall CPU utilization across all cores.",
+          "unit": "%",
+          "attributeColor": ""
+        },
+        {
+          "name": "temp",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Hottest CPU thermal zone (max of the cpu-thermal sensors).",
+          "unit": "C",
+          "attributeColor": ""
+        },
+        {
+          "name": "top_process_name",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Process name with the highest CPU usage.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "top_process_cmd",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Full command line of the top CPU process (truncated to 100 chars).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "top_process_cpu_percent",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "CPU usage of the top process.",
+          "unit": "%",
+          "attributeColor": ""
+        }
+      ],
+      "aggregateTypes": []
+    },
+    {
+      "name": "sysInfo_memory",
+      "displayName": "",
+      "type": "OBJECT",
+      "description": "RAM utilization, temperature, and the top memory-consuming process.",
+      "attributeColor": "",
+      "childs": [
+        {
+          "name": "percent",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Memory utilization percentage.",
+          "unit": "%",
+          "attributeColor": ""
+        },
+        {
+          "name": "temp",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Not available on the RZ/V2H (always 0).",
+          "unit": "C",
+          "attributeColor": ""
+        },
+        {
+          "name": "total",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Total physical memory (formatted, e.g. 7.20GB).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "available",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Memory available to start new applications (formatted).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "used",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Memory currently in use (formatted).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "top_process_name",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Process name holding the most RAM.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "top_process_cmd",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Full command line of the top memory process (truncated to 100 chars).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "top_process_mem",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Resident set size of the top memory process (formatted).",
+          "unit": "",
+          "attributeColor": ""
+        }
+      ],
+      "aggregateTypes": []
+    },
+    {
+      "name": "sysInfo_storage",
+      "displayName": "",
+      "type": "OBJECT",
+      "description": "Disk usage for the root filesystem.",
+      "attributeColor": "",
+      "childs": [
+        {
+          "name": "total",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Total disk capacity (formatted, e.g. 52.65GB).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "used",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Disk space used (formatted).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "free",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Disk space free (formatted).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "percent",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Disk utilization percentage.",
+          "unit": "%",
+          "attributeColor": ""
+        }
+      ],
+      "aggregateTypes": []
+    },
+    {
+      "name": "sysInfo_gpu",
+      "displayName": "",
+      "type": "OBJECT",
+      "description": "Not available on the RZ/V2H (always 0); kept so the dashboard shared with the Tria demo imports unchanged.",
+      "attributeColor": "",
+      "childs": [
+        {
+          "name": "usage_percent",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Not available on the RZ/V2H (always 0).",
+          "unit": "%",
+          "attributeColor": ""
+        },
+        {
+          "name": "temp",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Not available on the RZ/V2H (always 0).",
+          "unit": "C",
+          "attributeColor": ""
+        }
+      ],
+      "aggregateTypes": []
+    }
+  ],
+  "commands": [
+    {
+      "name": "set_backend",
+      "command": "set_backend",
+      "requiredParam": true,
+      "requiredAck": true,
+      "isOTACommand": false
+    },
+    {
+      "name": "set_zone",
+      "command": "set_zone",
+      "requiredParam": true,
+      "requiredAck": true,
+      "isOTACommand": false
+    },
+    {
+      "name": "set_conf",
+      "command": "set_conf",
+      "requiredParam": true,
+      "requiredAck": true,
+      "isOTACommand": false
+    },
+    {
+      "name": "set_interval",
+      "command": "set_interval",
+      "requiredParam": true,
+      "requiredAck": true,
+      "isOTACommand": false
+    },
+    {
+      "name": "reset_counters",
+      "command": "reset_counters",
+      "requiredParam": false,
+      "requiredAck": true,
+      "isOTACommand": false
+    },
+    {
+      "name": "show_config",
+      "command": "show_config",
+      "requiredParam": false,
+      "requiredAck": true,
+      "isOTACommand": false
+    },
+    {
+      "name": "camera_preset",
+      "command": "camera_preset",
+      "requiredParam": true,
+      "requiredAck": true,
+      "isOTACommand": false
+    },
+    {
+      "name": "camera_setting",
+      "command": "camera_setting",
+      "requiredParam": true,
+      "requiredAck": true,
+      "isOTACommand": false
+    },
+    {
+      "name": "camera_settings_reset",
+      "command": "camera_settings_reset",
+      "requiredParam": false,
+      "requiredAck": true,
+      "isOTACommand": false
+    },
+    {
+      "name": "snapshot",
+      "command": "snapshot",
+      "requiredParam": false,
+      "requiredAck": true,
+      "isOTACommand": false
+    }
+  ]
+}
