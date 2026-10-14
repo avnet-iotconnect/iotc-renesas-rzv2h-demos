@@ -146,7 +146,7 @@ The RZ/V AI SDK image has no `git`, so the repo is pushed from your PC. On the
 PC (Linux, macOS, WSL or Git Bash):
 
 ```bash
-git clone https://github.com/mlamp99/iotc-renesas-rzv2h-demos.git
+git clone https://github.com/avnet-iotconnect/iotc-renesas-rzv2h-demos.git
 cd iotc-renesas-rzv2h-demos
 deploy/push_to_board.sh <board-ip>
 ```

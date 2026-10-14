@@ -28,5 +28,6 @@ done
 
 log "starting pose_app.py $POSE_ARGS"
 cd "$BASE" || exit 1
+# start_pose.sh is a bash script (it uses BASH_SOURCE); run it by its shebang.
 # shellcheck disable=SC2086
-exec sh ./start_pose.sh $POSE_ARGS
+exec bash ./start_pose.sh $POSE_ARGS

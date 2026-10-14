@@ -10,9 +10,10 @@ Wants=network-online.target
 Type=simple
 Environment=PATH=/usr/bin:/bin:/usr/sbin:/sbin
 Environment=HOME=/root
-# Extra arguments for pose_app.py (e.g. --web-port 8080 --no-cloud).
+# Extra arguments for pose_app.py (e.g. --web-port 8080 --no-cloud). Quoted:
+# systemd splits an unquoted Environment= value at spaces.
 # deploy/install_pose_service.sh rewrites this line and the path below.
-Environment=POSE_ARGS=--web-port 8080
+Environment="POSE_ARGS=--web-port 8080"
 ExecStart=/bin/sh /root/iotc-renesas-rzv2h-demos/pose-safety/deploy/pose_boot.sh
 Restart=always
 RestartSec=5

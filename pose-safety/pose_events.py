@@ -73,10 +73,14 @@ def hand_raised(pose, thr=0.5):
     return False
 
 
-def torso_angle(pose, thr=0.5):
+def torso_angle(pose, thr=0.5, strict=False):
     """Degrees between the shoulder-mid -> hip-mid line and vertical.
-    0 = upright, 90 = lying. None when the torso is not visible."""
+    0 = upright, 90 = lying. None when the torso is not visible. With
+    ``strict`` all four torso points must be visible: one shoulder and the
+    opposite hip make a diagonal that reads as a lean."""
     k = pose.kpts
+    if strict and not all(_vis(k, i, thr) for i in (L_SHOULDER, R_SHOULDER, L_HIP, R_HIP)):
+        return None
     sh = _mid(k, L_SHOULDER, R_SHOULDER, thr)
     hp = _mid(k, L_HIP, R_HIP, thr)
     if sh is None or hp is None:
@@ -88,13 +92,29 @@ def torso_angle(pose, thr=0.5):
 
 
 def person_down(pose, thr=0.5, angle_thr=60.0):
-    """Lying / collapsed: torso near horizontal, or, when the torso is not
-    visible, a box much wider than tall."""
-    ang = torso_angle(pose, thr)
-    if ang is not None:
-        return ang >= angle_thr
+    """Lying / collapsed: the whole torso visible and near horizontal AND the
+    person's box at least as wide as it is tall (a lying body is wide; a
+    person leaning close to the camera is not), or, when no torso point is
+    visible at all, a box much wider than tall."""
     w, h = pose.x2 - pose.x1, pose.y2 - pose.y1
+    ang = torso_angle(pose, thr, strict=True)
+    if ang is not None:
+        return ang >= angle_thr and h > 0 and w / h >= 1.0
+    k = pose.kpts
+    if any(_vis(k, i, thr) for i in (L_SHOULDER, R_SHOULDER, L_HIP, R_HIP)):
+        return False            # part of a torso in view, but not enough to judge
     return h > 0 and w / h >= 1.4
+
+
+def drop_offframe_keypoints(poses, w, h, margin=4.0):
+    """Zero the visibility of keypoints the model placed on or beyond the
+    frame edge: for a person cut off by the picture, it still 'sees' the
+    missing joints at the border with fair confidence, and those invent
+    torsos and limbs that are not there."""
+    for p in poses:
+        k = p.kpts
+        out = (k[:, 0] <= margin) | (k[:, 0] >= w - margin) | (k[:, 1] <= margin) | (k[:, 1] >= h - margin)
+        k[out, 2] = 0.0
 
 
 def foot_point(pose, thr=0.5):
@@ -190,6 +210,11 @@ class EventTracker:
     # it is dropped). Falls get more so a crouch does not trip the alarm.
     DEBOUNCE = {"hands_up": 3, "hand_raised": 3, "person_down": 6, "zone_breach": 3,
                 "bending": 4}
+    # A detection with fewer visible keypoints than this is counted as a
+    # person but raises no event: the model occasionally finds a "person" in
+    # a blank wall or a dim ceiling with a handful of confident joints, and
+    # that phantom must not lie down in the hazard zone.
+    MIN_KPTS_FOR_EVENTS = 8
     TOTALS = {"hands_up": "hands_up", "person_down": "falls", "zone_breach": "zone_breaches"}
 
     def __init__(self, kpt_thres=0.5, bend_angle=45.0):
@@ -208,19 +233,29 @@ class EventTracker:
             self.totals[k] = 0
         self.max_people = 0
 
+    def clear_alerts(self):
+        """Drop the asserted alerts (the all-clear signal): they come back
+        only if the condition holds again for the full debounce."""
+        for f in ("person_down", "zone_breach", "bending"):
+            self.asserted[f] = False
+            self._streak[f] = 0
+            self._clear[f] = 0
+
     def update(self, poses, w, h, zone):
         thr = self.kpt_thres
+        drop_offframe_keypoints(poses, w, h)
         raw = {f: False for f in self.FLAGS}
         self.per_person = []
         zone_people = 0
         main = None             # the largest person: posture and reps follow them
         main_area = 0.0
         for p in poses:
-            hu = hands_up(p, thr)
-            hr = hr_ = hand_raised(p, thr)
-            down = person_down(p, thr)
-            in_zone = zone.contains_px(foot_point(p, thr), w, h) if zone else False
-            ang = torso_angle(p, thr)
+            solid = visible_count(p, thr) >= self.MIN_KPTS_FOR_EVENTS
+            hu = solid and hands_up(p, thr)
+            hr = hr_ = solid and hand_raised(p, thr)
+            down = solid and person_down(p, thr)
+            in_zone = solid and bool(zone) and zone.contains_px(foot_point(p, thr), w, h)
+            ang = torso_angle(p, thr) if solid else None
             self.per_person.append({"hands_up": hu, "hand_raised": hr, "down": down,
                                     "in_zone": in_zone, "angle": ang})
             raw["hands_up"] |= hu
@@ -229,7 +264,7 @@ class EventTracker:
             raw["zone_breach"] |= in_zone
             zone_people += int(in_zone)
             area = (p.x2 - p.x1) * (p.y2 - p.y1)
-            if area > main_area:
+            if solid and area > main_area:
                 main, main_area = p, area
         angle = torso_angle(main, thr) if main is not None else None
         raw["bending"] = angle is not None and angle >= self.bend_angle and not raw["person_down"]
@@ -255,17 +290,19 @@ class EventTracker:
 
         n = len(poses)
         self.max_people = max(self.max_people, n)
+        # Both hands up on the head is the ALL-CLEAR signal, not an alert:
+        # the app clears the asserted alerts on its rising edge. A hand-held
+        # stop (open palm) comes from the hand model, in the app.
         alert = None
         if self.asserted["person_down"]:
             alert = "PERSON DOWN"
         elif self.asserted["zone_breach"]:
             alert = "HAZARD ZONE BREACH"
-        elif self.asserted["hands_up"]:
-            alert = "STOP GESTURE"
         return {
             "people": n,
             "zone_people": zone_people,
             "hands_up": int(self.asserted["hands_up"]),
+            "all_clear": int(self.asserted["hands_up"]),
             "hand_raised": int(self.asserted["hand_raised"]),
             "person_down": int(self.asserted["person_down"]),
             "zone_breach": int(self.asserted["zone_breach"]),

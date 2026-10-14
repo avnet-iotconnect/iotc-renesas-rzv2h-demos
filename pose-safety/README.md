@@ -18,8 +18,8 @@ flip inference between the DRP-AI and the CPU while the demo runs.
 Contents: [What the visitor sees](#1-what-the-visitor-sees) ·
 [Hardware](#2-hardware) · [Setup](#3-setup) · [Running](#4-running) ·
 [Telemetry and commands](#5-telemetry-and-commands) · [Dashboard](#6-dashboard) ·
-[Tuning](#7-tuning) · [How the models were built](#8-how-the-models-were-built) ·
-[Measured](#9-measured) · [Troubleshooting](#10-troubleshooting) · [Files](#11-files)
+[Hand gestures](#7-hand-gestures) · [Tuning](#8-tuning) · [How the models were built](#9-how-the-models-were-built) ·
+[Measured](#10-measured) · [Troubleshooting](#11-troubleshooting) · [Files](#12-files)
 
 ---
 
@@ -29,10 +29,22 @@ Contents: [What the visitor sees](#1-what-the-visitor-sees) ·
   monitor (or any browser on the LAN).
 - A translucent **hazard zone** drawn on the floor area. Step into it and the
   zone turns red, a banner appears, and an alert goes to /IOTCONNECT.
-- Put **both hands above your head**: a "STOP GESTURE" alert, and a rep
-  counter for the playful version.
+- Put **both hands up on your head**: the green **ALL CLEAR**. It clears any
+  active alert (zone breach, person down, a held STOP) and is counted as a
+  rep for the playful version.
+- Show the camera an **open palm**: the red **STOP** banner, held as long as
+  the hand is up. The two signals look different on purpose: red bar for
+  stop and alerts, green bar for all clear.
 - **Person down**: torso near horizontal trips a "PERSON DOWN" alert.
 - A **posture angle** (torso lean from vertical) for the ergonomics story.
+- **Hand gestures**, with a second model on the DRP-AI: show the camera an
+  open palm, a fist, thumbs up, a peace sign, a pointed finger, "rock", "OK"
+  or "call me" and a **large badge in the picture names it**, readable from
+  across the room, with what the demo did about it underneath. Gestures are
+  events for /IOTCONNECT and can drive the demo itself: by default a **peace
+  sign flips inference between the DRP-AI and the CPU**, an open palm is the
+  STOP, thumbs up resets the counters and a fist saves a snapshot. See
+  [Hand gestures](#7-hand-gestures).
 - The panel shows **INFERENCE ON: DRP-AI / CPU** with the time per frame. From
   the dashboard, `set_backend cpu` moves the same model onto the four
   Cortex-A55 cores and the skeletons turn into a slideshow; `set_backend
@@ -65,7 +77,9 @@ scp model/pose_int8.tflite root@<board-ip>:/root/iotc-renesas-rzv2h-demos/pose-s
 
 `model/pose_drpai/` is the DRP-AI model (required); `model/pose_int8.tflite`
 is the CPU model for the live comparison (optional — without it `set_backend
-cpu` is refused). [§8](#8-how-the-models-were-built) says how to rebuild both.
+cpu` is refused); `model/hand_drpai/` is the hand-keypoint model (optional —
+without it gestures are off). [§9](#9-how-the-models-were-built) says how to
+build all three.
 
 Check the model on the board without a window:
 
@@ -130,14 +144,16 @@ alert is confirmed.
 
 | Attribute | What |
 |---|---|
-| `state` | `NOBODY IN VIEW`, `TRACKING n`, or the active alert (`HAZARD ZONE BREACH`, `PERSON DOWN`, `STOP GESTURE`) |
+| `state` | `NOBODY IN VIEW`, `TRACKING n`, `ALL CLEAR`, or the active alert (`HAZARD ZONE BREACH`, `PERSON DOWN`, `STOP (open palm)`) |
 | `pose.people`, `pose.zone_people` | people in view / inside the zone |
 | `pose.backend`, `pose.infer_ms`, `pose.fps` | where inference runs and how fast |
-| `pose.hands_up`, `pose.hand_raised`, `pose.person_down`, `pose.zone_breach`, `pose.bending` | 0/1 flags, debounced over a few frames |
+| `pose.hands_up` (= `pose.all_clear`), `pose.hand_raised`, `pose.person_down`, `pose.zone_breach`, `pose.bending` | 0/1 flags, debounced over a few frames; `hands_up` is the all-clear (both hands up on the head), and its rising edge clears the active alerts |
 | `pose.posture_angle` | main person's torso lean from vertical, degrees (-1 when not visible) |
 | `pose.reps`, `pose.conf_max`, `pose.keypoints_visible`, `pose.alert` | counters and detail |
-| `events.*` | totals since start: `zone_breaches`, `falls`, `hands_up`, `reps`, `max_people`, `uptime_min` |
-| `config.*` | `backend`, `conf`, `zone`, `telemetry_s`, `camera` |
+| `gesture.name`, `gesture.hand`, `gesture.action` | the hand gesture being held (`open_palm`, `fist`, `thumbs_up`, `thumbs_down`, `peace`, `pointing`, `rock`, `ok`, `call_me` or empty), which hand, and what the demo did with the last one |
+| `gesture.hands_seen`, `gesture.infer_ms`, `gesture.<name>` | hands with keypoints this sample, hand-model time per frame, and a count per gesture since start |
+| `events.*` | totals since start: `zone_breaches`, `falls`, `hands_up`, `reps`, `gestures`, `max_people`, `uptime_min` |
+| `config.*` | `backend`, `conf`, `zone`, `telemetry_s`, `camera`, `hands`, `gesture_actions` |
 | `sysInfo_*` | the same CPU / memory / storage / system objects as the arm demo |
 
 | Command | Argument | Effect |
@@ -146,7 +162,9 @@ alert is confirmed.
 | `set_zone` | `x1,y1,x2,y2,x3,y3[,...]` (0–1 or percent) \| `default` \| `clear` | hazard polygon, persisted in `pose_zone.json` |
 | `set_conf` | 0.05–0.95 | person confidence threshold |
 | `set_interval` | seconds | telemetry interval |
-| `reset_counters` | | zero the `events` totals |
+| `set_gesture_action` | `GESTURE ACTION`, action one of `alert` \| `toggle_backend` \| `reset_counters` \| `snapshot` \| `none` | what a hand gesture does; persisted |
+| `set_mirror` | `on` \| `off` \| `toggle` | mirror the picture (default on: a screen facing the viewer behaves like a mirror); persisted |
+| `reset_counters` | | zero the `events` and gesture totals |
 | `show_config` | | current configuration in the ack |
 | `camera_preset` | `normal` \| `bright` \| `dim` \| `vivid` \| `warm` \| `cool` \| `auto` | camera tuning (this demo's own file, `pose_camera_settings.json`) |
 | `camera_setting` | `NAME VALUE` | one camera control, applied live |
@@ -174,7 +192,64 @@ Suggested widgets, top to bottom:
 - **System**: the `sysInfo_cpu` usage and temperature widgets from the arm
   dashboard.
 
-## 7. Tuning
+## 7. Hand gestures
+
+A second YOLOv8n-pose model, trained on Ultralytics' 21-keypoint
+[hand-keypoints](https://docs.ultralytics.com/datasets/pose/hand-keypoints/)
+dataset, runs on the DRP-AI next to the body model. It does not scan the
+whole frame: the body model says where the wrists are, the app cuts a square
+around each wrist of the largest person (sized from the forearm, centred a
+little past the wrist) and the hand model sees the hand filling a 256x256
+picture. Keypoints are mapped back to the frame and drawn in finger colours.
+
+The gesture comes from finger states, not from a classifier. A finger is
+**extended** only when its knuckle-to-tip chain is nearly straight and the
+tip reaches past the knuckle, **curled** when the chain is clearly bent or
+the tip is folded back inside the knuckles; a half-bent finger, the normal
+state of a relaxed hand, is neither, and no gesture accepts it. The thumb is
+out when it stands clear of the palm. The stop, peace and rock signs must
+also be held **fingers up** (tips clearly above the wrist), which a hand
+hanging at someone's side never is. From that:
+
+| Gesture | Fingers | Default action |
+|---|---|---|
+| `open_palm` | all four out | `alert` — the red "STOP (open palm)" banner and `pose.alert` while held; both hands up on the head (ALL CLEAR) cancels it |
+| `fist` | all curled | `snapshot` |
+| `thumbs_up` / `thumbs_down` | thumb only, above / below the wrist | `reset_counters` / — |
+| `peace` | index + middle | `toggle_backend` — the live DRP-AI-vs-CPU switch without a dashboard |
+| `pointing` | index only | — |
+| `rock` | index + pinky | — |
+| `ok` | thumb tip on index tip, rest out | — |
+| `call_me` | thumb + pinky | — |
+
+Every recognised gesture is sent at once (`gesture.name`, `gesture.hand`,
+`gesture.action`) and counted, so /IOTCONNECT rules can act on any of them
+(a `pointing` could switch a light in another demo). A gesture must hold
+for 3 frames to count and fires its action once; `set_gesture_action
+GESTURE ACTION` remaps it, `none` turns the action off (the event still
+goes out). While a gesture is held, and for a moment after, a **large badge**
+in the middle of the picture names it (red for the STOP, amber otherwise)
+with the action underneath, so a visitor sees it from across the booth; the
+HDMI panel's third counter shows it too.
+
+Check the hand model on images or the live camera without the app:
+
+```bash
+python3 pose_selftest.py --hands                                  # one live frame
+python3 pose_selftest.py --hands --image /root/calib_public --save-dir /tmp/out
+```
+
+`--no-hands` runs the app without it. Hands are only looked for on the
+largest person, which keeps the cost to two small inferences per frame.
+
+Model quality matters more than the rules: the quick CPU-trained subset model
+(15 epochs, 5000 images) names open palms and thumbs up reliably but
+sometimes draws a front-facing fist as an open hand. The full-dataset Colab
+run ([§9](#9-how-the-models-were-built)) is the fix; the rules need no change.
+Hold a gesture still, palm towards the camera, about arm's length to two
+metres away.
+
+## 8. Tuning
 
 - **Zone**: `set_zone` with the corners where a person's feet (ankle midpoint,
   or the bottom of their box when the ankles are hidden) count as inside.
@@ -187,8 +262,13 @@ Suggested widgets, top to bottom:
   white balance, which suits a room full of people.
 - **Resolution**: `--width/--height` (default 1280x720). The model sees a
   640x640 letterbox either way; the capture size is for the screen.
+- **Mirror**: the picture is flipped left-right before anything else happens,
+  so people see themselves as in a mirror and the hazard zone sits where it
+  appears on screen. `--no-mirror` or `set_mirror off` shows the camera's
+  view instead (for a camera that watches an area from behind the visitors).
+  Telemetry's `gesture.hand` reports the person's real hand either way.
 
-## 8. How the models were built
+## 9. How the models were built
 
 Same recipe as the ball detector in
 [robotic-arm/CUSTOM_DRPAI_DETECTOR.md](../robotic-arm/CUSTOM_DRPAI_DETECTOR.md),
@@ -226,17 +306,40 @@ below run from this folder; the compiler and its work directory live in
    ```
    The detector recognises a decoded pose head (`[1, 56, 8400]`) by its
    channel count and the `pose` in the file name.
+5. **Hand model** (`model/hand_drpai/`, optional). YOLOv8n-pose with 21
+   keypoints, trained on Ultralytics' hand-keypoints dataset (26k images,
+   369 MB, fetched by the scripts). Two ways:
+   - **Colab T4, full dataset** (best): upload
+     [`train_hand_colab.ipynb`](train_hand_colab.ipynb) (regenerate with
+     `python3 gen_hand_notebook.py`), Runtime → Run all; about 1.5–2 hours.
+     It saves `hand_best.onnx` to your Drive.
+   - **This PC, CPU, a 5000-image subset**: `../common/drpai/train_hand_pose.sh`
+     (15 epochs at 256 px, a few hours on 16 cores; writes
+     `common/drpai/build/hand/hand_best.onnx`).
 
-## 9. Measured
+   Both use the identity flip map instead of the dataset's own `flip_idx`,
+   which swaps the index and middle fingers when an image is mirrored — a
+   mirrored hand keeps its finger identities, and the gesture rules depend on
+   telling the fingers apart. Then compile and push:
+   ```bash
+   ../common/drpai/compile.sh ../common/drpai/build/hand/hand_best.onnx ../common/drpai/build/hand/calib hand_drpai
+   scp -r model/hand_drpai root@<board-ip>:/root/iotc-renesas-rzv2h-demos/pose-safety/model/
+   ```
+   `calib/` holds 100 dataset images for INT8 calibration (the training script
+   makes it; any 100 JPEGs of hands do). 256x256 input: the model only ever
+   sees the crop around a wrist.
+
+## 10. Measured
 
 On the reference board, 1280x720 camera, 640x640 model input:
 
 | | DRP-AI | CPU (4× A55, INT8) |
 |---|---|---|
 | Pose inference, standalone, per frame | ~36 ms | ~360 ms (measured while the demo was running on the DRP-AI) |
-| App loop with HDMI window + browser view | ~16 fps | — |
+| Hand model, both wrist crops of one person, per frame | ~20 ms | — |
+| App loop with HDMI window + browser view (body, or body + hands) | ~16 fps | — |
 | App loop headless | ~20 fps | — |
-| Compile time | ~3 min | — |
+| Compile time, either model | ~3 min | — |
 
 Both backends found a person in 12/12 desk frames and 10/10 public images (up
 to six people in one frame); the CPU model is the same network, INT8, so the
@@ -244,7 +347,7 @@ skeletons match and only the speed changes. The inference time the panel shows i
 pre/post-processing and rises when the CPU is busy drawing; the accelerator
 itself needs about 17 ms.
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 - **Blue or orange picture**: the camera file holds a fixed white balance.
   `camera_preset auto` or `camera_settings_reset`.
@@ -257,13 +360,22 @@ itself needs about 17 ms.
 - **Alerts flicker**: raise the debounce counts in `pose_events.py`.
 - **A sitting or crouching person trips PERSON DOWN**: raise `angle_thr` in
   `person_down()`; it is 60° of torso lean.
+- **A gesture fires when nobody is gesturing** (open palm on a relaxed
+  hand was the classic): the bars are `STRAIGHT_EXT`, `STRAIGHT_CURL`,
+  `EXT_REACH` and `CURL_REACH` at the top of `hand_gestures.py`, the hold is
+  `GestureTracker(hold=4)`,
+  and `--hand-conf` (0.5) drops low-confidence hands. A better hand model
+  (full-dataset Colab run) is the real cure: a model that draws straight
+  fingers on a fist defeats any rule.
 
-## 11. Files
+## 12. Files
 
 | File | Role |
 |---|---|
 | [`pose_app.py`](pose_app.py) | The demo: camera, inference thread, events, HDMI, browser view, /IOTCONNECT |
 | [`pose_events.py`](pose_events.py) | Keypoints → hands-up / person-down / zone / posture, debounce, totals |
+| [`hand_gestures.py`](hand_gestures.py) | Wrist crops → hand model → 21 keypoints → gesture rules, debounce, drawing |
+| [`gen_hand_notebook.py`](gen_hand_notebook.py) → [`train_hand_colab.ipynb`](train_hand_colab.ipynb), [`../common/drpai/train_hand_pose.sh`](../common/drpai/train_hand_pose.sh) | Train the hand model on Colab (full dataset) or on a PC's CPU (subset) |
 | [`pose_draw.py`](pose_draw.py) | Skeleton, zone and banner drawing |
 | [`pose_selftest.py`](pose_selftest.py), [`pose_view.py`](pose_view.py) | One-shot model check; bare live viewer |
 | [`start_pose.sh`](start_pose.sh), [`deploy/pose_boot.sh`](deploy/pose_boot.sh), [`deploy/posedemo.service`](deploy/posedemo.service), [`deploy/install_pose_service.sh`](deploy/install_pose_service.sh) | Launch and boot service |

@@ -9,7 +9,7 @@ set -e
 BASE="$(cd "$(dirname "$0")/.." && pwd)"
 ARGS="${1:---web-port 8080}"
 sed -e "s#^ExecStart=.*#ExecStart=/bin/sh $BASE/deploy/pose_boot.sh#" \
-    -e "s#^Environment=POSE_ARGS=.*#Environment=POSE_ARGS=$ARGS#" \
+    -e "s#^Environment=\"*POSE_ARGS=.*#Environment=\"POSE_ARGS=$ARGS\"#" \
     "$BASE/deploy/posedemo.service" > /etc/systemd/system/posedemo.service
 systemctl daemon-reload
 # Only one app can own the camera and the DRP-AI. Stop the arm demo's

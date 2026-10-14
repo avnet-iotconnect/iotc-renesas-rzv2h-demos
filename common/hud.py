@@ -7,15 +7,18 @@ the full-screen window — video on the left, and on the right what a visitor
 wants to know at a glance: where inference is running and how fast, what the
 arm is doing, and how many balls it has moved.
 
-Rendered at the monitor's native 1920x1080. That is the cheap option on this
-board, not the expensive one: the window toolkit scales anything smaller in
-software, and showing a 1280x720 picture full screen costs 27 ms against 10 ms
-for a native one. The panel is only redrawn when the state changes or a few
-times a second — its anti-aliased text is the costly part of the picture.
+Rendered at the monitor's native size (asked of the compositor when the window
+process starts; 1920x1080 on the reference monitor). That is the cheap option
+on this board, not the expensive one: the window toolkit scales anything
+smaller in software, and showing a 1280x720 picture full screen costs 27 ms
+against 10 ms for a native one. The panel is only redrawn when the state
+changes or a few times a second — its anti-aliased text is the costly part of
+the picture.
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -24,11 +27,52 @@ import time
 import cv2
 import numpy as np
 
-W, H = 1920, 1080
-VIDEO_W = 1440           # 4:3 video at full height
-K = H / 720.0            # layout below is written for a 720-line picture
-PANEL_X = VIDEO_W
-PANEL_W = W - VIDEO_W
+
+def output_size():
+    """(width, height) of the output Weston drives: from wayland-info's
+    wl_output 'current' mode (needs the display environment, see
+    deploy/display_env.sh), else the framebuffer, else 1920x1080.
+
+    Not a constant: a monitor whose EDID cannot be read gets the kernel's
+    1024x768 fallback, and a full-screen surface bigger than the output is a
+    protocol error that kills the window."""
+    try:
+        out = subprocess.run(["wayland-info"], capture_output=True, text=True, timeout=3).stdout
+        size = None
+        for line in out.splitlines():
+            m = re.search(r"width:\s*(\d+)(?:\s*px)?,\s*height:\s*(\d+)", line)
+            if m:
+                size = (int(m.group(1)), int(m.group(2)))
+            elif "flags:" in line and "current" in line and size:
+                return size
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    try:
+        with open("/sys/class/graphics/fb0/virtual_size") as f:
+            w, h = f.read().strip().split(",")
+        return int(w), int(h)
+    except (OSError, ValueError):
+        pass
+    return 1920, 1080
+
+
+W = H = VIDEO_W = K = PANEL_X = PANEL_W = None
+
+
+def _layout(width, height):
+    """Lay the picture out for an output of width x height: the 4:3 video on
+    the left, the panel on the right (at least a quarter of the width), text
+    scaled for 720 lines and for the panel's width, whichever is tighter."""
+    global W, H, VIDEO_W, K, PANEL_X, PANEL_W, _panel
+    W, H = int(width), int(height)
+    VIDEO_W = min(int(round(H * 4 / 3)), int(round(W * 0.76)))
+    PANEL_X = VIDEO_W
+    PANEL_W = W - VIDEO_W
+    K = min(H / 720.0, PANEL_W / 320.0)
+    _panel = None
+
+
+_layout(1920, 1080)      # default until the window process asks the compositor
 
 BG = (24, 20, 18)
 RULE = (70, 62, 56)
@@ -90,12 +134,19 @@ def compose(frame, info):
     if _panel is None or key != _panel_key or now - _panel_at >= PANEL_REFRESH_S:
         _panel = _draw_panel(info)[:, PANEL_X:].copy()
         _panel_key, _panel_at = key, now
-    canvas = np.empty((H, W, 3), dtype=np.uint8)
-    canvas[:, :VIDEO_W] = cv2.resize(frame, (VIDEO_W, H), interpolation=cv2.INTER_LINEAR)
+    canvas = np.zeros((H, W, 3), dtype=np.uint8)
+    # Fit the frame into the video area, keeping its aspect, bars where needed.
+    fh, fw = frame.shape[:2]
+    s = min(VIDEO_W / fw, H / fh)
+    nw, nh = max(1, int(fw * s)), max(1, int(fh * s))
+    x0, y0 = (VIDEO_W - nw) // 2, (H - nh) // 2
+    canvas[y0:y0 + nh, x0:x0 + nw] = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
     canvas[:, PANEL_X:] = _panel
     cv2.line(canvas, (VIDEO_W, 0), (VIDEO_W, H), RULE, 2)
     if info.get("banner"):
-        cv2.rectangle(canvas, (0, 0), (VIDEO_W, _px(64)), (40, 40, 220), -1)
+        # banner_color (BGR) lets a notice (green "ALL CLEAR") look unlike an alert (red).
+        colour = tuple(int(c) for c in (info.get("banner_color") or (40, 40, 220)))
+        cv2.rectangle(canvas, (0, 0), (VIDEO_W, _px(64)), colour, -1)
         cv2.putText(canvas, str(info["banner"]), (_px(16), _px(44)), _BOLD,
                     1.2 * K, WHITE, max(1, int(round(2 * K))), cv2.LINE_AA)
     if info.get("arm_fault"):
@@ -239,6 +290,8 @@ def _serve(title):
     stdin = sys.stdin.buffer
     snapshot = os.environ.get("HUD_SNAPSHOT")
     snapshot_at = 0.0
+    _layout(*output_size())
+    print(f"[hud] output {W}x{H}: video {VIDEO_W}x{H}, panel {PANEL_W} px", flush=True)
     cv2.namedWindow(title, cv2.WINDOW_NORMAL)
     cv2.setWindowProperty(title, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     while True:

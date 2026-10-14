@@ -50,12 +50,30 @@ def main():
     ap.add_argument("--loop", type=int, default=0, help="time N consecutive live frames")
     ap.add_argument("--save", default="/tmp/pose_selftest.jpg")
     ap.add_argument("--save-dir", default=None, help="with --image DIR: write annotated copies here")
+    ap.add_argument("--hands", action="store_true",
+                    help="also run the hand model (model/hand_drpai) on crops around the wrists")
+    ap.add_argument("--model-hand", default=os.path.join(HERE, "model", "hand_drpai"))
     args = ap.parse_args()
 
     det = YoloDetector(args.model, class_ids=None, conf_thres=args.conf)
     if not det.is_pose:
         raise SystemExit(f"{args.model} is not a pose model (format {det.format})")
     print(f"[pose] {det.nkpt} keypoints, backend={det.backend_desc}")
+    hand = None
+    if args.hands:
+        from hand_gestures import HandEngine, draw_hand
+        hand = HandEngine(args.model_hand, body_kpt_thres=args.kpt_conf)
+        print(f"[hands] 21 keypoints, backend={hand.det.backend_desc}")
+
+    def run_hands(frame, poses):
+        """Hands for the largest person; draws them; returns a summary string."""
+        if hand is None:
+            return ""
+        hands = hand.detect(frame, poses)
+        for hd in hands:
+            draw_hand(frame, hd, hand.kpt_thres)
+        names = [f"{hd.side}:{hd.gesture or 'hand'}" for hd in hands]
+        return f"  hands {hand.ms:.1f} ms " + (", ".join(names) if names else "none")
 
     if args.image:
         paths = (sorted(glob.glob(os.path.join(args.image, "*.jpg")))
@@ -75,7 +93,8 @@ def main():
             total_ms += dt
             found += bool(poses)
             best = max((q.conf for q in poses), default=0.0)
-            print(f"{os.path.basename(p):28} {dt:6.1f} ms  people: {len(poses)}  best {best:.2f}")
+            hands_text = run_hands(frame, poses)
+            print(f"{os.path.basename(p):28} {dt:6.1f} ms  people: {len(poses)}  best {best:.2f}{hands_text}")
             if args.save_dir:
                 for q in poses:
                     draw_pose(frame, q, args.kpt_conf)
@@ -109,8 +128,13 @@ def main():
         print(f"  person conf={q.conf:.2f} box=({q.x1:.0f},{q.y1:.0f})-({q.x2:.0f},{q.y2:.0f}) "
               f"visible: {len(vis)}/{det.nkpt}")
         draw_pose(frame, q, args.kpt_conf)
+    hands_text = run_hands(frame, poses)
+    if hands_text:
+        print(hands_text.strip())
     cv2.imwrite(args.save, frame)
     print(f"annotated frame -> {args.save}")
+    if hand is not None:
+        hand.close()
     det.close()
 
 

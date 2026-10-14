@@ -34,7 +34,8 @@ import numpy as np
 import camera_settings as cam_settings
 import systemdata
 from detectors.yolo_detector import YoloDetector, is_drpai_model
-from pose_draw import draw_banner, draw_corner_stats, draw_pose, draw_zone
+from hand_gestures import GESTURES, GestureTracker, HandEngine, draw_hand
+from pose_draw import draw_banner, draw_corner_stats, draw_gesture_badge, draw_pose, draw_zone
 from pose_events import EventTracker, Zone
 
 try:
@@ -49,7 +50,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "pose_config.json")
 DRPAI_MODEL = os.path.join(HERE, "model", "pose_drpai")
 CPU_MODEL = os.path.join(HERE, "model", "pose_int8.tflite")
+HAND_MODEL = os.path.join(HERE, "model", "hand_drpai")
 MODE_NAME = "pose"
+
+# What a recognised hand gesture does (cloud: set_gesture_action GESTURE ACTION).
+# "alert" is the hand-held STOP: a red banner while the gesture is held.
+GESTURE_ACTIONS = ("none", "alert", "toggle_backend", "reset_counters", "snapshot")
+DEFAULT_GESTURE_ACTIONS = {"open_palm": "alert", "peace": "toggle_backend",
+                           "thumbs_up": "reset_counters", "fist": "snapshot"}
+ACTION_LABELS = {"alert": "STOP", "toggle_backend": "switch inference", "reset_counters": "counters reset",
+                 "snapshot": "snapshot saved", "none": ""}
+RED, GREEN, AMBER = (40, 40, 220), (60, 170, 60), (0, 200, 255)
+ALL_CLEAR_LINGER_S = 3.0        # how long the green ALL CLEAR stays after the hands come down
+GESTURE_BADGE_LINGER_S = 1.5    # how long a gesture badge stays after the hand relaxes
 
 
 # ---------------------------------------------------------------- config
@@ -61,6 +74,8 @@ class Config:
         self.backend = "drpai"
         self.conf = 0.4
         self.telemetry_s = 2.0
+        self.mirror = True
+        self.gesture_actions = dict(DEFAULT_GESTURE_ACTIONS)
         self.load()
 
     def load(self):
@@ -70,6 +85,11 @@ class Config:
             self.backend = str(d.get("backend", self.backend)).lower()
             self.conf = float(d.get("conf", self.conf))
             self.telemetry_s = float(d.get("telemetry_s", self.telemetry_s))
+            self.mirror = bool(d.get("mirror", self.mirror))
+            ga = d.get("gesture_actions")
+            if isinstance(ga, dict):
+                self.gesture_actions = {g: a for g, a in ga.items()
+                                        if g in GESTURES and a in GESTURE_ACTIONS}
         except (OSError, ValueError, TypeError):
             pass
 
@@ -77,9 +97,13 @@ class Config:
         try:
             with open(CONFIG_PATH, "w") as f:
                 json.dump({"backend": self.backend, "conf": self.conf,
-                           "telemetry_s": self.telemetry_s}, f, indent=2)
+                           "telemetry_s": self.telemetry_s, "mirror": self.mirror,
+                           "gesture_actions": self.gesture_actions}, f, indent=2)
         except OSError as e:
             print(f"[config] save failed: {e}")
+
+    def gesture_actions_text(self):
+        return ",".join(f"{g}={a}" for g, a in sorted(self.gesture_actions.items())) or "none"
 
 
 # ---------------------------------------------------------------- inference
@@ -191,14 +215,14 @@ class FreshCamera:
 
 
 class InferenceThread:
-    """Runs the detector on the newest camera frame, continuously, so capture,
-    inference and drawing overlap: the DRP-AI call releases the GIL, and the
-    HDMI window and browser view cost the main thread 10-20 ms per frame
-    that would otherwise sit between inferences. The main loop takes the
-    latest (frame, poses) pair."""
+    """Runs ``infer(frame)`` on the newest camera frame, continuously, so
+    capture, inference and drawing overlap: the DRP-AI call releases the GIL,
+    and the HDMI window and browser view cost the main thread 10-20 ms per
+    frame that would otherwise sit between inferences. The main loop takes
+    the latest (frame, result) pair."""
 
-    def __init__(self, cam, engine):
-        self.cam, self.engine = cam, engine
+    def __init__(self, cam, infer, mirror=lambda: False):
+        self.cam, self.infer, self.mirror = cam, infer, mirror
         self._result = None
         self._lock = threading.Lock()
         self._new = threading.Event()
@@ -216,18 +240,23 @@ class InferenceThread:
                 time.sleep(0.002)
                 continue
             last = frame
+            if self.mirror():
+                # A screen facing the viewer should behave like a mirror;
+                # flipping before inference keeps every overlay and the zone
+                # in the picture people see, with the text readable.
+                frame = cv2.flip(frame, 1)
             try:
-                poses = self.engine.detect(frame)
+                out = self.infer(frame)
             except Exception as e:
                 print(f"[inference] {e}")
                 time.sleep(0.05)
                 continue
             with self._lock:
-                self._result = (frame, poses)
+                self._result = (frame, out)
             self._new.set()
 
     def get(self, timeout=0.5):
-        """The newest (frame, poses), or None if nothing new within timeout."""
+        """The newest (frame, result), or None if nothing new within timeout."""
         if not self._new.wait(timeout):
             return None
         self._new.clear()
@@ -419,10 +448,28 @@ class PoseApp:
             self.cfg.backend = args.backend
         if args.conf is not None:
             self.cfg.conf = args.conf
+        if args.no_mirror:
+            self.cfg.mirror = False
         self.engine = PoseEngine(self.cfg.conf, self.cfg.backend,
                                  drpai_model=args.model_drpai, cpu_model=args.model_cpu)
         self.cfg.backend = self.engine.active
         print(f"[app] backends available: {self.engine.available}, active: {self.engine.backend}")
+
+        # Second model on the DRP-AI: hand keypoints on crops around the wrists.
+        self.hand = None
+        if not args.no_hands and is_drpai_model(args.model_hand):
+            try:
+                self.hand = HandEngine(args.model_hand, conf=args.hand_conf,
+                                       kpt_thres=args.hand_kpt_conf, body_kpt_thres=args.kpt_conf)
+                print(f"[app] hand model {os.path.basename(args.model_hand)} on {self.hand.backend}; "
+                      f"gesture actions: {self.cfg.gesture_actions_text()}")
+            except Exception as e:
+                print(f"[app] hand model not usable: {e}")
+        elif not args.no_hands:
+            print(f"[app] no hand model at {args.model_hand}; gestures off")
+        self.gestures = GestureTracker()
+        self.last_gesture_action = "none"
+        self.all_clear_until = 0.0
 
         self.zone = Zone.load()
         self.tracker = EventTracker(kpt_thres=args.kpt_conf)
@@ -492,8 +539,35 @@ class PoseApp:
                 self.cfg.telemetry_s = s
                 self.cfg.save()
                 text = f"telemetry every {s:g} s"
+            elif name == "set_mirror":
+                v = (_arg(args, "mirror", "value", "on") or "toggle").lower()
+                if v in ("toggle", "flip"):
+                    self.cfg.mirror = not self.cfg.mirror
+                elif v in ("on", "1", "true", "yes"):
+                    self.cfg.mirror = True
+                elif v in ("off", "0", "false", "no"):
+                    self.cfg.mirror = False
+                else:
+                    raise ValueError("set_mirror on|off|toggle")
+                self.cfg.save()
+                text = f"picture is {'mirrored' if self.cfg.mirror else 'as the camera sees it'}"
+            elif name == "set_gesture_action":
+                gesture, action = _pair(args)
+                gesture = (gesture or "").lower()
+                action = (action or "none").lower()
+                if gesture not in GESTURES:
+                    raise ValueError(f"unknown gesture '{gesture}'; valid: {', '.join(GESTURES)}")
+                if action not in GESTURE_ACTIONS:
+                    raise ValueError(f"unknown action '{action}'; valid: {', '.join(GESTURE_ACTIONS)}")
+                if action == "none":
+                    self.cfg.gesture_actions.pop(gesture, None)
+                else:
+                    self.cfg.gesture_actions[gesture] = action
+                self.cfg.save()
+                text = f"gesture actions: {self.cfg.gesture_actions_text()}"
             elif name == "reset_counters":
                 self.tracker.reset_totals()
+                self.gestures.reset_totals()
                 text = "counters reset"
             elif name == "show_config":
                 text = json.dumps(self.config_payload())
@@ -540,43 +614,118 @@ class PoseApp:
             "zone": self.zone.to_text(),
             "telemetry_s": self.cfg.telemetry_s,
             "camera": f"/dev/video{self.cam.index} {self.cam.width}x{self.cam.height}",
+            "hands": f"on ({self.hand.backend})" if self.hand is not None else "off",
+            "gesture_actions": self.cfg.gesture_actions_text(),
+            "mirror": "on" if self.cfg.mirror else "off",
         }
 
-    def state_text(self, summary):
+    def active_alert(self, summary):
+        """The body-pose alert (person down, zone breach), else the hand-held
+        STOP: a gesture mapped to 'alert' while it is held."""
         if summary["alert"]:
             return summary["alert"]
+        g = self.gestures.current
+        if g and self.cfg.gesture_actions.get(g) == "alert":
+            return f"STOP  ({g.replace('_', ' ')})"
+        return None
+
+    def active_notice(self, summary):
+        """ALL CLEAR: both hands up on the head, and for a few seconds after."""
+        if summary.get("all_clear") or time.time() < self.all_clear_until:
+            return "ALL CLEAR"
+        return None
+
+    def state_text(self, summary):
+        alert = self.active_alert(summary)
+        if alert:
+            return alert
+        notice = self.active_notice(summary)
+        if notice:
+            return notice
         return f"TRACKING {summary['people']}" if summary["people"] else "NOBODY IN VIEW"
 
-    def telemetry_payload(self, summary):
+    def on_all_clear(self):
+        """Both hands went up on the head: acknowledge and drop every active
+        alert, including a held hand STOP, and show the green notice."""
+        self.tracker.clear_alerts()
+        self.gestures.clear()
+        self.all_clear_until = time.time() + ALL_CLEAR_LINGER_S
+        print("[app] ALL CLEAR (both hands up): alerts cleared")
+
+    def gesture_payload(self, hands):
+        g = dict(self.gestures.totals)
+        g.update({"name": self.gestures.current or "", "hand": self.gestures.current_hand,
+                  "action": self.last_gesture_action, "hands_seen": len(hands),
+                  "infer_ms": round(self.hand.ms, 1) if self.hand is not None else 0.0})
+        return g
+
+    def telemetry_payload(self, summary, hands=()):
         pose = dict(summary)
-        pose["alert"] = pose["alert"] or ""
+        pose["alert"] = self.active_alert(summary) or self.active_notice(summary) or ""
         pose.update({"backend": self.engine.backend, "infer_ms": round(self.engine.ms, 1),
                      "fps": round(self.fps, 1)})
         events = dict(self.tracker.totals)
+        events["gestures"] = sum(self.gestures.totals.values())
         events["max_people"] = self.tracker.max_people
         events["uptime_min"] = round((time.time() - self.started) / 60.0, 1)
-        return {"state": self.state_text(summary), "pose": pose, "events": events,
-                "config": self.config_payload()}
+        return {"state": self.state_text(summary), "pose": pose, "gesture": self.gesture_payload(hands),
+                "events": events, "config": self.config_payload()}
 
     def hud_info(self, summary):
         t = self.tracker.totals
+        g = self.gestures.current
+        gesture_text = g.replace("_", " ").upper() if g else "-"
+        if self.hand is None:
+            gesture_text = "no hand model"
+        alert = self.active_alert(summary)
         return {
+            "banner": alert or self.active_notice(summary),
+            "banner_color": RED if alert else GREEN,
             "mode": MODE_NAME,
-            "subtitle": "DRP-AI human pose",
+            "subtitle": "DRP-AI pose + gestures" if self.hand is not None else "DRP-AI human pose",
             "state": self.state_text(summary),
             "backend": self.engine.backend,
-            "yolo_ms": self.engine.ms,
+            "yolo_ms": self.engine.ms + (self.hand.ms if self.hand is not None else 0.0),
             "fps": self.fps,
             "cloud": self.cloud.connected if self.cloud.client is not None else None,
             "counters": [("PEOPLE IN VIEW", summary["people"], True),
                          ("ALERTS  zone / person down", f"{t['zone_breaches']} / {t['falls']}", False),
-                         ("HANDS-UP REPS", t["reps"], False)],
-            "banner": summary["alert"],
+                         ("HAND GESTURE", gesture_text, False)],
         }
+
+    # ----- gestures
+
+    def apply_gesture(self, name):
+        """A gesture was just confirmed: do what it is mapped to."""
+        action = self.cfg.gesture_actions.get(name, "none")
+        try:
+            if action == "toggle_backend":
+                self.cfg.backend = self.engine.switch("toggle")
+                self.cfg.save()
+            elif action == "reset_counters":
+                self.tracker.reset_totals()
+                self.gestures.reset_totals()
+            elif action == "snapshot":
+                self.snapshot_path = "/tmp/pose_snapshot.jpg"
+            # "alert" is shown while the gesture is held (active_alert); "none" is just an event.
+        except Exception as e:
+            print(f"[gesture] {name} -> {action} failed: {e}")
+        self.last_gesture_action = action
+        print(f"[gesture] {name} ({self.gestures.current_hand}) -> {action}")
+
+    def _infer(self, frame):
+        """Runs on the inference thread: body pose, then hands on wrist crops."""
+        poses = self.engine.detect(frame)
+        hands = self.hand.detect(frame, poses) if self.hand is not None else []
+        if hands and self.cfg.mirror:
+            # The body model names wrists from the person's point of view; in
+            # a mirrored picture those come out swapped. Report the real hand.
+            hands = [h._replace(side={"L": "R", "R": "L"}.get(h.side, h.side)) for h in hands]
+        return poses, hands
 
     # ----- drawing
 
-    def annotate(self, frame, poses, summary):
+    def annotate(self, frame, poses, hands, summary):
         h, w = frame.shape[:2]
         if self.zone:
             draw_zone(frame, self.zone.to_px(w, h), breached=bool(summary["zone_breach"]),
@@ -596,10 +745,28 @@ class PoseApp:
             label = f"{p.conf:.2f}" + (": " + ", ".join(tags) if tags else "")
             draw_pose(frame, p, self.args.kpt_conf, label=label,
                       alert=flags["down"] or flags["in_zone"])
-        if summary["alert"]:
-            draw_banner(frame, summary["alert"])
-        draw_corner_stats(frame, f"{self.engine.backend}  {self.engine.ms:.0f} ms  {self.fps:.1f} fps  "
-                                 f"{summary['people']} people")
+        for hd in hands:
+            draw_hand(frame, hd, self.args.hand_kpt_conf)
+        alert = self.active_alert(summary)
+        notice = self.active_notice(summary)
+        if alert:
+            draw_banner(frame, alert, RED)
+        elif notice:
+            draw_banner(frame, notice, GREEN)
+        # Big gesture badge, readable from across the room, while the gesture
+        # is held and for a moment after.
+        name = self.gestures.current or (self.gestures.last_name
+                                         if time.time() - self.gestures.last_at < GESTURE_BADGE_LINGER_S else None)
+        if name:
+            action = self.cfg.gesture_actions.get(name, "none")
+            sub = ACTION_LABELS.get(action, "")
+            if action == "toggle_backend":
+                sub = f"inference now on {self.engine.backend}"
+            draw_gesture_badge(frame, name.replace("_", " ").upper(), sub or None,
+                               RED if action == "alert" else AMBER)
+        hand_text = f"  hands {self.hand.ms:.0f} ms" if self.hand is not None else ""
+        draw_corner_stats(frame, f"{self.engine.backend}  pose {self.engine.ms:.0f} ms{hand_text}  "
+                                 f"{self.fps:.1f} fps  {summary['people']} people")
 
     # ----- main loop
 
@@ -612,19 +779,26 @@ class PoseApp:
         while self.cam.read() is None and time.time() - t0 < 3.0:
             time.sleep(0.02)
         print(f"[app] running: camera /dev/video{self.cam.index} {self.cam.width}x{self.cam.height}, "
-              f"zone={'set' if self.zone else 'none'}, window={'yes' if self.screen else 'no'}, "
-              f"cloud={'yes' if self.cloud.client else 'no'}")
-        infer = InferenceThread(self.cam, self.engine)
+              f"mirror={'on' if self.cfg.mirror else 'off'}, zone={'set' if self.zone else 'none'}, "
+              f"window={'yes' if self.screen else 'no'}, cloud={'yes' if self.cloud.client else 'no'}")
+        infer = InferenceThread(self.cam, self._infer, mirror=lambda: self.cfg.mirror)
         infer.start()
         try:
             while True:
                 result = infer.get(timeout=0.5)
                 if result is None:
                     continue
-                frame, poses = result
+                frame, (poses, hands) = result
                 frame = frame.copy()           # the capture thread owns the original
                 h, w = frame.shape[:2]
                 summary = self.tracker.update(poses, w, h, self.zone)
+                if "hands_up" in self.tracker.rising:
+                    self.on_all_clear()
+                    # This frame's summary was built before the clear.
+                    summary = dict(summary, alert=None, person_down=0, zone_breach=0, bending=0)
+                self.gestures.update(hands)
+                if self.gestures.rising:
+                    self.apply_gesture(self.gestures.rising)
 
                 now = time.perf_counter()
                 inst = 1.0 / max(1e-3, now - t_prev)
@@ -632,7 +806,7 @@ class PoseApp:
                 self.fps = inst if not self.fps else 0.9 * self.fps + 0.1 * inst
                 n += 1
 
-                self.annotate(frame, poses, summary)
+                self.annotate(frame, poses, hands, summary)
                 if self.screen is not None:
                     self.screen.show(to_4x3(frame), self.hud_info(summary))
                     if self.screen.quit_requested:
@@ -653,12 +827,14 @@ class PoseApp:
                 for msg in self.cloud.pop_commands():
                     self.handle_command(msg)
 
-                # Alerts go out the moment they are confirmed; otherwise on the interval.
-                urgent = any(f in ("person_down", "zone_breach", "hands_up") for f in self.tracker.rising)
+                # Alerts, the all-clear and gestures go out the moment they are
+                # confirmed; otherwise on the interval.
+                urgent = (any(f in ("person_down", "zone_breach", "hands_up") for f in self.tracker.rising)
+                          or self.gestures.rising is not None)
                 if urgent or time.time() - last_telemetry >= self.cfg.telemetry_s:
-                    self.telemetry.submit(self.telemetry_payload(summary))
+                    self.telemetry.submit(self.telemetry_payload(summary, hands))
                     last_telemetry = time.time()
-                    if urgent:
+                    if summary["alert"] and self.tracker.rising:
                         print(f"[app] ALERT {summary['alert']} ({', '.join(self.tracker.rising)})")
 
                 if n % 150 == 0:
@@ -676,6 +852,8 @@ class PoseApp:
                 self.screen.close()
             if self.web is not None:
                 self.web.stop()
+            if self.hand is not None:
+                self.hand.close()
             self.engine.close()
             print(f"[app] stopped after {n} frames")
 
@@ -693,6 +871,12 @@ def parse_args():
                     help="camera tuning file for this demo (created on auto if missing)")
     ap.add_argument("--model-drpai", default=DRPAI_MODEL)
     ap.add_argument("--model-cpu", default=CPU_MODEL)
+    ap.add_argument("--model-hand", default=HAND_MODEL, help="DRP-AI hand keypoint model directory")
+    ap.add_argument("--no-hands", action="store_true", help="skip the hand model even if installed")
+    ap.add_argument("--hand-conf", type=float, default=0.5, help="hand confidence threshold")
+    ap.add_argument("--hand-kpt-conf", type=float, default=0.3, help="hand keypoint visibility threshold")
+    ap.add_argument("--no-mirror", action="store_true",
+                    help="show the picture as the camera sees it (default: mirrored, like a mirror)")
     ap.add_argument("--headless", action="store_true", help="no HDMI window")
     ap.add_argument("--web-port", type=int, default=None, help="MJPEG browser view on this port")
     ap.add_argument("--no-cloud", action="store_true", help="do not connect to /IOTCONNECT")

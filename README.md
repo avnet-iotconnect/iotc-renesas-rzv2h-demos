@@ -40,7 +40,7 @@ that uses them.
 1. Complete the quickstart above.
 2. On your PC:
    ```bash
-   git clone https://github.com/mlamp99/iotc-renesas-rzv2h-demos.git
+   git clone https://github.com/avnet-iotconnect/iotc-renesas-rzv2h-demos.git
    cd iotc-renesas-rzv2h-demos
    deploy/push_to_board.sh <board-ip>
    ```

@@ -48,6 +48,7 @@ def main():
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--conf", type=float, default=0.4)
     ap.add_argument("--kpt-conf", type=float, default=0.5)
+    ap.add_argument("--no-mirror", action="store_true", help="do not mirror the picture")
     ap.add_argument("--headless", action="store_true", help="no HDMI window")
     ap.add_argument("--save-every", type=float, default=0.0,
                     help="write the annotated frame to --save-path every N seconds")
@@ -84,6 +85,8 @@ def main():
             if not ok or frame is None:
                 time.sleep(0.01)
                 continue
+            if not args.no_mirror:
+                frame = cv2.flip(frame, 1)
             t0 = time.perf_counter()
             poses = det.detect_pose(frame)
             ms = (time.perf_counter() - t0) * 1000

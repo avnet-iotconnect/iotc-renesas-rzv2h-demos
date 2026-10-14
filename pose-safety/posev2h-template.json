@@ -24,7 +24,7 @@
       "name": "state",
       "displayName": "",
       "type": "STRING",
-      "description": "NOBODY IN VIEW, TRACKING n, or the active alert.",
+      "description": "NOBODY IN VIEW, TRACKING n, ALL CLEAR, or the active alert (PERSON DOWN, HAZARD ZONE BREACH, STOP).",
       "unit": "",
       "aggregateTypes": []
     },
@@ -72,7 +72,15 @@
           "name": "hands_up",
           "displayName": "",
           "type": "INTEGER",
-          "description": "1 while someone holds both hands above their head (stop gesture).",
+          "description": "1 while someone holds both hands up on their head: the ALL-CLEAR signal (clears active alerts).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "all_clear",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "1 while the all-clear signal is held (same as hands_up).",
           "unit": "",
           "attributeColor": ""
         },
@@ -152,7 +160,129 @@
           "name": "alert",
           "displayName": "",
           "type": "STRING",
-          "description": "Active alert text, or empty.",
+          "description": "Active alert: PERSON DOWN, HAZARD ZONE BREACH, STOP (open palm); ALL CLEAR while the all-clear shows; else empty.",
+          "unit": "",
+          "attributeColor": ""
+        }
+      ]
+    },
+    {
+      "name": "gesture",
+      "displayName": "",
+      "type": "OBJECT",
+      "description": "Hand gesture recognition (second model on the DRP-AI, on crops around the wrists).",
+      "attributeColor": "",
+      "aggregateTypes": [],
+      "childs": [
+        {
+          "name": "name",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Hand gesture currently held by the main person, or empty: open_palm, fist, thumbs_up, thumbs_down, peace, pointing, rock, ok, call_me.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "hand",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Which hand: L or R (the person's own left / right).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "action",
+          "displayName": "",
+          "type": "STRING",
+          "description": "What the demo did with the last gesture (toggle_backend, reset_counters, snapshot, alert, none).",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "hands_seen",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Hands with keypoints this sample.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "infer_ms",
+          "displayName": "",
+          "type": "DECIMAL",
+          "description": "Hand model time per frame, all crops (EWMA).",
+          "unit": "ms",
+          "attributeColor": ""
+        },
+        {
+          "name": "open_palm",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Count since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "fist",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Count since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "thumbs_up",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Count since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "thumbs_down",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Count since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "peace",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Count since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "pointing",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Count since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "rock",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Count since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "ok",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Count since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "call_me",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Count since start.",
           "unit": "",
           "attributeColor": ""
         }
@@ -186,7 +316,7 @@
           "name": "hands_up",
           "displayName": "",
           "type": "INTEGER",
-          "description": "Stop gestures since start.",
+          "description": "All-clear signals (both hands up on the head) since start.",
           "unit": "",
           "attributeColor": ""
         },
@@ -195,6 +325,14 @@
           "displayName": "",
           "type": "INTEGER",
           "description": "Hands-up repetitions since start.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "gestures",
+          "displayName": "",
+          "type": "INTEGER",
+          "description": "Hand gestures recognised since start.",
           "unit": "",
           "attributeColor": ""
         },
@@ -261,6 +399,30 @@
           "displayName": "",
           "type": "STRING",
           "description": "Camera device and resolution.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "hands",
+          "displayName": "",
+          "type": "STRING",
+          "description": "Hand model: on (DRP-AI) or off.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "gesture_actions",
+          "displayName": "",
+          "type": "STRING",
+          "description": "gesture=action pairs in force.",
+          "unit": "",
+          "attributeColor": ""
+        },
+        {
+          "name": "mirror",
+          "displayName": "",
+          "type": "STRING",
+          "description": "on when the picture is mirrored (like a mirror facing the viewer), off when shown as the camera sees it.",
           "unit": "",
           "attributeColor": ""
         }
@@ -574,6 +736,20 @@
     {
       "name": "set_interval",
       "command": "set_interval",
+      "requiredParam": true,
+      "requiredAck": true,
+      "isOTACommand": false
+    },
+    {
+      "name": "set_gesture_action",
+      "command": "set_gesture_action",
+      "requiredParam": true,
+      "requiredAck": true,
+      "isOTACommand": false
+    },
+    {
+      "name": "set_mirror",
+      "command": "set_mirror",
       "requiredParam": true,
       "requiredAck": true,
       "isOTACommand": false
