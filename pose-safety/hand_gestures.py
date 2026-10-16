@@ -8,7 +8,6 @@ trained on Ultralytics' 21-keypoint hand dataset (``model/hand_drpai``) on
 the crop, maps the keypoints back to the frame and names the gesture from
 finger states:
 
-    open_palm   all four fingers extended            (stop)
     fist        all curled
     thumbs_up / thumbs_down
     peace       index + middle
@@ -46,8 +45,9 @@ HAND_SKELETON = [(0, 1), (1, 2), (2, 3), (3, 4),
                  (9, 13), (13, 14), (14, 15), (15, 16),
                  (13, 17), (17, 18), (18, 19), (19, 20), (0, 17)]
 
-GESTURES = ("open_palm", "fist", "thumbs_up", "thumbs_down", "peace", "pointing",
-            "rock", "ok", "call_me")
+# No "open palm": an open hand is what hands look like most of the time, and
+# the model draws relaxed fingers straight often enough that it fired constantly.
+GESTURES = ("fist", "thumbs_up", "thumbs_down", "peace", "pointing", "rock", "ok", "call_me")
 
 # Body-pose keypoints (COCO) used to find the hands.
 L_ELBOW, R_ELBOW, L_WRIST, R_WRIST = 7, 8, 9, 10
@@ -162,7 +162,8 @@ def _fingers_up(k, names, palm, margin=0.5):
 def classify(k, thr=0.3):
     """Gesture name or None, from a [21, 3] hand (x, y, visibility). Every
     finger must be visible and either clearly straight or clearly curled;
-    the stop (open palm), peace and rock signs must be held fingers-up."""
+    the peace and rock signs must be held fingers-up. An open hand is not a
+    gesture."""
     st, palm = finger_states(k, thr)
     if st is None or any(v is None for v in st.values()):
         return None
@@ -192,8 +193,6 @@ def classify(k, thr=0.3):
         if tip_y > wrist_y + 0.3 * palm and tip_y > k[INDEX[0], 1] + 0.2 * palm:
             return "thumbs_down"
         return None
-    if i and m and r and p and _fingers_up(k, tuple(FINGERS), palm):
-        return "open_palm"
     if ci and cm and cr and cp and not t:
         return "fist"
     return None

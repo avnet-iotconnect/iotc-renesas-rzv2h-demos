@@ -54,14 +54,15 @@ HAND_MODEL = os.path.join(HERE, "model", "hand_drpai")
 MODE_NAME = "pose"
 
 # What a recognised hand gesture does (cloud: set_gesture_action GESTURE ACTION).
-# "alert" is the hand-held STOP: a red banner while the gesture is held.
-GESTURE_ACTIONS = ("none", "alert", "toggle_backend", "reset_counters", "snapshot")
-DEFAULT_GESTURE_ACTIONS = {"open_palm": "alert", "peace": "toggle_backend",
-                           "thumbs_up": "reset_counters", "fist": "snapshot"}
-ACTION_LABELS = {"alert": "STOP", "toggle_backend": "switch inference", "reset_counters": "counters reset",
-                 "snapshot": "snapshot saved", "none": ""}
+# The E-STOP itself is a body signal (both hands up on the head) and latches;
+# "clear_estop" is the gesture that releases it, held for ESTOP_RESET_HOLD_S.
+GESTURE_ACTIONS = ("none", "clear_estop", "toggle_backend", "reset_counters", "snapshot")
+DEFAULT_GESTURE_ACTIONS = {"thumbs_up": "clear_estop", "peace": "toggle_backend", "fist": "snapshot"}
+ACTION_LABELS = {"clear_estop": "clears the E-STOP", "toggle_backend": "switch inference",
+                 "reset_counters": "counters reset", "snapshot": "snapshot saved", "none": ""}
 RED, GREEN, AMBER = (40, 40, 220), (60, 170, 60), (0, 200, 255)
-ALL_CLEAR_LINGER_S = 3.0        # how long the green ALL CLEAR stays after the hands come down
+ESTOP_RESET_HOLD_S = 1.0        # the clearing gesture must be held this long: no accidental reset
+ESTOP_CLEARED_LINGER_S = 2.5    # the green "E-STOP CLEARED" confirmation
 GESTURE_BADGE_LINGER_S = 1.5    # how long a gesture badge stays after the hand relaxes
 
 
@@ -92,6 +93,9 @@ class Config:
                                         if g in GESTURES and a in GESTURE_ACTIONS}
         except (OSError, ValueError, TypeError):
             pass
+        if "clear_estop" not in self.gesture_actions.values():
+            # Something must be able to release the E-STOP from in front of the camera.
+            self.gesture_actions["thumbs_up"] = "clear_estop"
 
     def save(self):
         try:
@@ -469,7 +473,8 @@ class PoseApp:
             print(f"[app] no hand model at {args.model_hand}; gestures off")
         self.gestures = GestureTracker()
         self.last_gesture_action = "none"
-        self.all_clear_until = 0.0
+        self.estop_cleared_until = 0.0
+        self._urgent = False
 
         self.zone = Zone.load()
         self.tracker = EventTracker(kpt_thres=args.kpt_conf)
@@ -569,6 +574,12 @@ class PoseApp:
                 self.tracker.reset_totals()
                 self.gestures.reset_totals()
                 text = "counters reset"
+            elif name == "clear_estop":
+                if self.tracker.estop:
+                    self.clear_estop("cloud command")
+                    text = "E-STOP cleared"
+                else:
+                    text = "no E-STOP is latched"
             elif name == "show_config":
                 text = json.dumps(self.config_payload())
             elif name == "camera_preset":
@@ -620,19 +631,13 @@ class PoseApp:
         }
 
     def active_alert(self, summary):
-        """The body-pose alert (person down, zone breach), else the hand-held
-        STOP: a gesture mapped to 'alert' while it is held."""
-        if summary["alert"]:
-            return summary["alert"]
-        g = self.gestures.current
-        if g and self.cfg.gesture_actions.get(g) == "alert":
-            return f"STOP  ({g.replace('_', ' ')})"
-        return None
+        """E-STOP (latched), person down or zone breach; None otherwise."""
+        return summary["alert"] or None
 
     def active_notice(self, summary):
-        """ALL CLEAR: both hands up on the head, and for a few seconds after."""
-        if summary.get("all_clear") or time.time() < self.all_clear_until:
-            return "ALL CLEAR"
+        """The green confirmation for a moment after the E-STOP is released."""
+        if time.time() < self.estop_cleared_until:
+            return "E-STOP CLEARED"
         return None
 
     def state_text(self, summary):
@@ -644,13 +649,19 @@ class PoseApp:
             return notice
         return f"TRACKING {summary['people']}" if summary["people"] else "NOBODY IN VIEW"
 
-    def on_all_clear(self):
-        """Both hands went up on the head: acknowledge and drop every active
-        alert, including a held hand STOP, and show the green notice."""
-        self.tracker.clear_alerts()
+    def clear_estop(self, source):
+        """Release the latched E-STOP (a held clearing gesture, or the cloud)."""
+        self.tracker.clear_estop()
         self.gestures.clear()
-        self.all_clear_until = time.time() + ALL_CLEAR_LINGER_S
-        print("[app] ALL CLEAR (both hands up): alerts cleared")
+        self.estop_cleared_until = time.time() + ESTOP_CLEARED_LINGER_S
+        self._urgent = True
+        print(f"[app] E-STOP cleared ({source})")
+
+    def clear_gesture_held(self, now):
+        """True once the gesture mapped to clear_estop has been held long enough."""
+        g = self.gestures.current
+        return (g is not None and self.cfg.gesture_actions.get(g) == "clear_estop"
+                and now - self.gestures.last_at >= ESTOP_RESET_HOLD_S)
 
     def gesture_payload(self, hands):
         g = dict(self.gestures.totals)
@@ -699,7 +710,9 @@ class PoseApp:
         """A gesture was just confirmed: do what it is mapped to."""
         action = self.cfg.gesture_actions.get(name, "none")
         try:
-            if action == "toggle_backend":
+            if action == "clear_estop":
+                pass        # released in the main loop once the gesture has been held long enough
+            elif action == "toggle_backend":
                 self.cfg.backend = self.engine.switch("toggle")
                 self.cfg.save()
             elif action == "reset_counters":
@@ -707,7 +720,7 @@ class PoseApp:
                 self.gestures.reset_totals()
             elif action == "snapshot":
                 self.snapshot_path = "/tmp/pose_snapshot.jpg"
-            # "alert" is shown while the gesture is held (active_alert); "none" is just an event.
+            # "none" is just an event.
         except Exception as e:
             print(f"[gesture] {name} -> {action} failed: {e}")
         self.last_gesture_action = action
@@ -762,8 +775,10 @@ class PoseApp:
             sub = ACTION_LABELS.get(action, "")
             if action == "toggle_backend":
                 sub = f"inference now on {self.engine.backend}"
+            elif action == "clear_estop":
+                sub = "hold to clear the E-STOP" if self.tracker.estop else ""
             draw_gesture_badge(frame, name.replace("_", " ").upper(), sub or None,
-                               RED if action == "alert" else AMBER)
+                               GREEN if action == "clear_estop" and self.tracker.estop else AMBER)
         hand_text = f"  hands {self.hand.ms:.0f} ms" if self.hand is not None else ""
         draw_corner_stats(frame, f"{self.engine.backend}  pose {self.engine.ms:.0f} ms{hand_text}  "
                                  f"{self.fps:.1f} fps  {summary['people']} people")
@@ -792,13 +807,12 @@ class PoseApp:
                 frame = frame.copy()           # the capture thread owns the original
                 h, w = frame.shape[:2]
                 summary = self.tracker.update(poses, w, h, self.zone)
-                if "hands_up" in self.tracker.rising:
-                    self.on_all_clear()
-                    # This frame's summary was built before the clear.
-                    summary = dict(summary, alert=None, person_down=0, zone_breach=0, bending=0)
                 self.gestures.update(hands)
                 if self.gestures.rising:
                     self.apply_gesture(self.gestures.rising)
+                if self.tracker.estop and self.clear_gesture_held(time.time()):
+                    self.clear_estop(f"{self.gestures.current} held")
+                    summary = dict(summary, alert=None, estop=0)
 
                 now = time.perf_counter()
                 inst = 1.0 / max(1e-3, now - t_prev)
@@ -827,10 +841,11 @@ class PoseApp:
                 for msg in self.cloud.pop_commands():
                     self.handle_command(msg)
 
-                # Alerts, the all-clear and gestures go out the moment they are
-                # confirmed; otherwise on the interval.
+                # Alerts, the E-STOP and its release, and gestures go out the
+                # moment they happen; otherwise on the interval.
                 urgent = (any(f in ("person_down", "zone_breach", "hands_up") for f in self.tracker.rising)
-                          or self.gestures.rising is not None)
+                          or self.gestures.rising is not None or self._urgent)
+                self._urgent = False
                 if urgent or time.time() - last_telemetry >= self.cfg.telemetry_s:
                     self.telemetry.submit(self.telemetry_payload(summary, hands))
                     last_telemetry = time.time()

@@ -4,7 +4,10 @@
 
 Per person (from a ``Pose``: box + 17 COCO keypoints):
 
-- ``hands_up``     both wrists above the nose (the "stop" gesture)
+- ``hands_up``     both wrists above the nose: both hands up on the head,
+                   the E-STOP signal. The tracker latches ``estop`` on it;
+                   only ``clear_estop()`` (a held thumbs up, or the cloud)
+                   releases it
 - ``hand_raised``  either wrist above the shoulder line
 - ``torso_angle``  lean of the shoulder-to-hip line from vertical, degrees
 - ``person_down``  torso near horizontal, or a wide flat box with hips low
@@ -21,6 +24,7 @@ reports rising edges so the app can send an alert exactly once.
 import json
 import math
 import os
+import time
 
 NOSE, L_EYE, R_EYE, L_EAR, R_EAR = 0, 1, 2, 3, 4
 L_SHOULDER, R_SHOULDER, L_ELBOW, R_ELBOW, L_WRIST, R_WRIST = 5, 6, 7, 8, 9, 10
@@ -208,7 +212,7 @@ class EventTracker:
     FLAGS = ("hands_up", "hand_raised", "person_down", "zone_breach", "bending")
     # Frames a flag must hold before it is asserted (and must clear before
     # it is dropped). Falls get more so a crouch does not trip the alarm.
-    DEBOUNCE = {"hands_up": 3, "hand_raised": 3, "person_down": 6, "zone_breach": 3,
+    DEBOUNCE = {"hands_up": 6, "hand_raised": 3, "person_down": 6, "zone_breach": 3,
                 "bending": 4}
     # A detection with fewer visible keypoints than this is counted as a
     # person but raises no event: the model occasionally finds a "person" in
@@ -227,19 +231,19 @@ class EventTracker:
         self.max_people = 0
         self.rising = []            # flags that rose on the last update
         self.per_person = []        # [{hands_up, down, in_zone, angle}] for drawing
+        self.estop = False          # latched by hands_up, released by clear_estop()
+        self.estop_at = 0.0
 
     def reset_totals(self):
         for k in self.totals:
             self.totals[k] = 0
         self.max_people = 0
 
-    def clear_alerts(self):
-        """Drop the asserted alerts (the all-clear signal): they come back
-        only if the condition holds again for the full debounce."""
-        for f in ("person_down", "zone_breach", "bending"):
-            self.asserted[f] = False
-            self._streak[f] = 0
-            self._clear[f] = 0
+    def clear_estop(self):
+        """Release the latched E-STOP. It latches again only if both hands
+        go up on the head again for the full debounce."""
+        self.estop = False
+        self._streak["hands_up"] = 0
 
     def update(self, poses, w, h, zone):
         thr = self.kpt_thres
@@ -290,11 +294,14 @@ class EventTracker:
 
         n = len(poses)
         self.max_people = max(self.max_people, n)
-        # Both hands up on the head is the ALL-CLEAR signal, not an alert:
-        # the app clears the asserted alerts on its rising edge. A hand-held
-        # stop (open palm) comes from the hand model, in the app.
+        # Both hands up on the head is the E-STOP: it latches, and stays until
+        # clear_estop(). The other alerts clear by themselves when over.
+        if "hands_up" in self.rising and not self.estop:
+            self.estop, self.estop_at = True, time.time()
         alert = None
-        if self.asserted["person_down"]:
+        if self.estop:
+            alert = "E-STOP"
+        elif self.asserted["person_down"]:
             alert = "PERSON DOWN"
         elif self.asserted["zone_breach"]:
             alert = "HAZARD ZONE BREACH"
@@ -302,7 +309,7 @@ class EventTracker:
             "people": n,
             "zone_people": zone_people,
             "hands_up": int(self.asserted["hands_up"]),
-            "all_clear": int(self.asserted["hands_up"]),
+            "estop": int(self.estop),
             "hand_raised": int(self.asserted["hand_raised"]),
             "person_down": int(self.asserted["person_down"]),
             "zone_breach": int(self.asserted["zone_breach"]),

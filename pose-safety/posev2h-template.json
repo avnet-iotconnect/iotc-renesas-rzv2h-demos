@@ -24,7 +24,7 @@
       "name": "state",
       "displayName": "",
       "type": "STRING",
-      "description": "NOBODY IN VIEW, TRACKING n, ALL CLEAR, or the active alert (PERSON DOWN, HAZARD ZONE BREACH, STOP).",
+      "description": "NOBODY IN VIEW, TRACKING n, E-STOP CLEARED, or the active alert (E-STOP, PERSON DOWN, HAZARD ZONE BREACH).",
       "unit": "",
       "aggregateTypes": []
     },
@@ -72,15 +72,15 @@
           "name": "hands_up",
           "displayName": "",
           "type": "INTEGER",
-          "description": "1 while someone holds both hands up on their head: the ALL-CLEAR signal (clears active alerts).",
+          "description": "1 while someone holds both hands up on their head: the E-STOP signal.",
           "unit": "",
           "attributeColor": ""
         },
         {
-          "name": "all_clear",
+          "name": "estop",
           "displayName": "",
           "type": "INTEGER",
-          "description": "1 while the all-clear signal is held (same as hands_up).",
+          "description": "1 while the E-STOP is latched: set by hands on the head, released by a thumbs up held for a second or the clear_estop command.",
           "unit": "",
           "attributeColor": ""
         },
@@ -160,7 +160,7 @@
           "name": "alert",
           "displayName": "",
           "type": "STRING",
-          "description": "Active alert: PERSON DOWN, HAZARD ZONE BREACH, STOP (open palm); ALL CLEAR while the all-clear shows; else empty.",
+          "description": "Active alert: E-STOP, PERSON DOWN, HAZARD ZONE BREACH; E-STOP CLEARED for a moment after a release; else empty.",
           "unit": "",
           "attributeColor": ""
         }
@@ -178,7 +178,7 @@
           "name": "name",
           "displayName": "",
           "type": "STRING",
-          "description": "Hand gesture currently held by the main person, or empty: open_palm, fist, thumbs_up, thumbs_down, peace, pointing, rock, ok, call_me.",
+          "description": "Hand gesture currently held by the main person, or empty: fist, thumbs_up, thumbs_down, peace, pointing, rock, ok, call_me.",
           "unit": "",
           "attributeColor": ""
         },
@@ -194,7 +194,7 @@
           "name": "action",
           "displayName": "",
           "type": "STRING",
-          "description": "What the demo did with the last gesture (toggle_backend, reset_counters, snapshot, alert, none).",
+          "description": "What the demo did with the last gesture (clear_estop, toggle_backend, reset_counters, snapshot, none).",
           "unit": "",
           "attributeColor": ""
         },
@@ -212,14 +212,6 @@
           "type": "DECIMAL",
           "description": "Hand model time per frame, all crops (EWMA).",
           "unit": "ms",
-          "attributeColor": ""
-        },
-        {
-          "name": "open_palm",
-          "displayName": "",
-          "type": "INTEGER",
-          "description": "Count since start.",
-          "unit": "",
           "attributeColor": ""
         },
         {
@@ -316,7 +308,7 @@
           "name": "hands_up",
           "displayName": "",
           "type": "INTEGER",
-          "description": "All-clear signals (both hands up on the head) since start.",
+          "description": "E-STOP signals (both hands up on the head) since start.",
           "unit": "",
           "attributeColor": ""
         },
@@ -751,6 +743,13 @@
       "name": "set_mirror",
       "command": "set_mirror",
       "requiredParam": true,
+      "requiredAck": true,
+      "isOTACommand": false
+    },
+    {
+      "name": "clear_estop",
+      "command": "clear_estop",
+      "requiredParam": false,
       "requiredAck": true,
       "isOTACommand": false
     },
