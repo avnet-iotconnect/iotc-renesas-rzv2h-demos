@@ -20,7 +20,11 @@ find . -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 echo ""
 echo "=== Checking the board ==="
 python3 - <<'PY'
-import glob, os
+import glob, os, sys
+
+# Shared code lives in common/; the ball model in robotic-arm/model/.
+sys.path.insert(0, os.path.abspath("common"))
+os.environ.setdefault("RZV2H_APP_DIR", os.path.abspath("robotic-arm"))
 
 def check(label, fn):
     try:
@@ -46,7 +50,7 @@ def _arm():
     import hid
     found = hid.enumerate(0x0483, 0x5750)
     if not found:
-        raise RuntimeError("xArm (USB 0483:5750) not found — is it plugged in and powered?")
+        return "not on USB (needed for the arm demo only)"
     return "xArm found on USB"
 
 def _drpai():
@@ -67,6 +71,13 @@ def _model():
     path, conf = default_ball_model()
     return f"{os.path.relpath(path)} (conf {conf})"
 
+def _pose_model():
+    d = "pose-safety/model"
+    have = [m for m in ("pose_drpai", "hand_drpai", "pose_int8.tflite") if os.path.exists(os.path.join(d, m))]
+    if "pose_drpai" not in have:
+        return "not copied yet (pose demo only, see pose-safety/README.md §3.1)"
+    return ", ".join(have)
+
 ok = all([
     check("OpenCV / numpy", _cv),
     check("IOTCONNECT SDK", _iotc),
@@ -74,11 +85,12 @@ ok = all([
     check("xArm", _arm),
     check("DRP-AI", _drpai),
     check("USB camera", _camera),
-    check("ball model", _model),
+    check("ball model (arm demo)", _model),
+    check("pose models", _pose_model),
 ])
 print("\nAll checks passed." if ok else "\nSome checks failed — see above.")
 PY
 
 echo ""
-echo "Next: copy iotcDeviceConfig.json, device-cert.pem and device-pkey.pem into"
-echo "$SCRIPT_DIR (see README), then run:  ./start.sh --web-port 8080"
+echo "Next: cd robotic-arm or cd pose-safety and follow that folder's README"
+echo "(models, /IOTCONNECT credentials, running, boot service)."

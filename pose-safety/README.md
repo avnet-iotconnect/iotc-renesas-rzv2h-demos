@@ -29,22 +29,20 @@ Contents: [What the visitor sees](#1-what-the-visitor-sees) ·
   monitor (or any browser on the LAN).
 - A translucent **hazard zone** drawn on the floor area. Step into it and the
   zone turns red, a banner appears, and an alert goes to /IOTCONNECT.
-- Put **both hands up on your head**: the green **ALL CLEAR**. It clears any
-  active alert (zone breach, person down, a held STOP) and is counted as a
-  rep for the playful version.
-- Show the camera an **open palm**: the red **STOP** banner, held as long as
-  the hand is up. The two signals look different on purpose: red bar for
-  stop and alerts, green bar for all clear.
+- Put **both hands up on your head**: the **E-STOP**. A red bar latches and
+  stays, whatever happens next, until someone **holds a thumbs up for a
+  second** in front of the camera (or an operator sends `clear_estop`). A
+  green "E-STOP CLEARED" confirms the release. Like a real e-stop: easy to
+  trip on purpose, hard to trip by accident, and never self-resetting.
 - **Person down**: torso near horizontal trips a "PERSON DOWN" alert.
 - A **posture angle** (torso lean from vertical) for the ergonomics story.
-- **Hand gestures**, with a second model on the DRP-AI: show the camera an
-  open palm, a fist, thumbs up, a peace sign, a pointed finger, "rock", "OK"
-  or "call me" and a **large badge in the picture names it**, readable from
-  across the room, with what the demo did about it underneath. Gestures are
-  events for /IOTCONNECT and can drive the demo itself: by default a **peace
-  sign flips inference between the DRP-AI and the CPU**, an open palm is the
-  STOP, thumbs up resets the counters and a fist saves a snapshot. See
-  [Hand gestures](#7-hand-gestures).
+- **Hand gestures**, with a second model on the DRP-AI: show the camera a
+  fist, thumbs up, a peace sign, a pointed finger, "rock", "OK" or "call me"
+  and a **large badge in the picture names it**, readable from across the
+  room, with what the demo did about it underneath. Gestures are events for
+  /IOTCONNECT and can drive the demo itself: by default a **peace sign flips
+  inference between the DRP-AI and the CPU**, a held thumbs up releases the
+  E-STOP and a fist saves a snapshot. See [Hand gestures](#7-hand-gestures).
 - The panel shows **INFERENCE ON: DRP-AI / CPU** with the time per frame. From
   the dashboard, `set_backend cpu` moves the same model onto the four
   Cortex-A55 cores and the skeletons turn into a slideshow; `set_backend
@@ -56,10 +54,12 @@ Contents: [What the visitor sees](#1-what-the-visitor-sees) ·
   [repo README](../README.md) and the
   [/IOTCONNECT quickstart](https://github.com/avnet-iotconnect/iotc-python-lite-sdk-demos/tree/main/renesas-rzv2h-evk)
   for flashing, onboarding and the one-time `setup_board.sh`).
-- **One USB UVC camera**. The reference build uses a Logitech Brio 101 at
-  1280x720; any UVC camera works. Mount it at chest height looking across the
-  area so whole bodies are in frame.
-- **HDMI monitor** (optional: the browser view shows the same picture).
+- **One USB UVC camera**. The reference builds use a Logitech Brio 101 and a
+  Logitech C920 at 1280x720; any UVC camera works. Mount it at chest height
+  looking across the area so whole bodies are in frame.
+- **HDMI monitor** (optional: the browser view shows the same picture). Plug
+  it in before power-up; without one Weston does not start and the boot
+  service runs the demo headless after a 60 s wait.
 - Ethernet.
 
 ## 3. Setup
@@ -67,12 +67,13 @@ Contents: [What the visitor sees](#1-what-the-visitor-sees) ·
 ### 3.1 Files on the board
 
 Push the repo (`deploy/push_to_board.sh <board-ip>` from the repo root), then,
-from this folder, the two pose models, which are git-ignored because of their
-size:
+from this folder, the three models, which are git-ignored because of their
+size (`push_to_board.sh` skips them):
 
 ```bash
-scp -r model/pose_drpai   root@<board-ip>:/root/iotc-renesas-rzv2h-demos/pose-safety/model/
-scp model/pose_int8.tflite root@<board-ip>:/root/iotc-renesas-rzv2h-demos/pose-safety/model/
+ssh root@<board-ip> mkdir -p /root/iotc-renesas-rzv2h-demos/pose-safety/model
+scp -r model/pose_drpai model/hand_drpai model/pose_int8.tflite \
+    root@<board-ip>:/root/iotc-renesas-rzv2h-demos/pose-safety/model/
 ```
 
 `model/pose_drpai/` is the DRP-AI model (required); `model/pose_int8.tflite`
@@ -95,10 +96,24 @@ python3 pose_selftest.py --model model/pose_int8.tflite --image /root/calib_publ
 1. **Template**: import [`posev2h-template.json`](posev2h-template.json)
    (Devices → Templates → Import). Code `poseV2H`.
 2. **Device**: create a device from that template, download its
-   certificate/key and the `iotcDeviceConfig.json`, and put the three files in
+   certificate zip and its `iotcDeviceConfig.json`, and put the three files in
    this folder on the board (`/root/iotc-renesas-rzv2h-demos/pose-safety/`:
    `iotcDeviceConfig.json`, `device-cert.pem`, `device-pkey.pem`), or
-   anywhere and pass `--iotc-dir`.
+   anywhere and pass `--iotc-dir`. The zip holds `cert_<device name>.crt` and
+   `pk_<device name>.pem`; rename them on the way (the browser may also have
+   saved the config as `iotcDeviceConfig (1).json` or similar):
+
+   ```bash
+   unzip <device>-certificates.zip
+   cp "cert_<device name>.crt" device-cert.pem
+   cp "pk_<device name>.pem"   device-pkey.pem
+   cp iotcDeviceConfig*.json   iotcDeviceConfig.json
+   scp iotcDeviceConfig.json device-cert.pem device-pkey.pem \
+       root@<board-ip>:/root/iotc-renesas-rzv2h-demos/pose-safety/
+   ```
+
+   The app prints `[cloud] connected as <device id>` in `pose_run.log` once
+   it is online.
 3. **Rules** (optional, for the alert story): on `pose.zone_breach = 1`,
    `pose.person_down = 1` and `pose.hands_up = 1`. Alerts are sent the moment
    they are confirmed, not on the next interval.
@@ -144,13 +159,14 @@ alert is confirmed.
 
 | Attribute | What |
 |---|---|
-| `state` | `NOBODY IN VIEW`, `TRACKING n`, `ALL CLEAR`, or the active alert (`HAZARD ZONE BREACH`, `PERSON DOWN`, `STOP (open palm)`) |
+| `state` | `NOBODY IN VIEW`, `TRACKING n`, `E-STOP CLEARED`, or the active alert (`E-STOP`, `PERSON DOWN`, `HAZARD ZONE BREACH`) |
 | `pose.people`, `pose.zone_people` | people in view / inside the zone |
 | `pose.backend`, `pose.infer_ms`, `pose.fps` | where inference runs and how fast |
-| `pose.hands_up` (= `pose.all_clear`), `pose.hand_raised`, `pose.person_down`, `pose.zone_breach`, `pose.bending` | 0/1 flags, debounced over a few frames; `hands_up` is the all-clear (both hands up on the head), and its rising edge clears the active alerts |
+| `pose.hands_up`, `pose.hand_raised`, `pose.person_down`, `pose.zone_breach`, `pose.bending` | 0/1 flags, debounced over a few frames; `hands_up` (both hands up on the head) is the E-STOP signal |
+| `pose.estop` | 1 while the E-STOP is latched; it stays 1 after the hands come down, until a held thumbs up or `clear_estop` |
 | `pose.posture_angle` | main person's torso lean from vertical, degrees (-1 when not visible) |
 | `pose.reps`, `pose.conf_max`, `pose.keypoints_visible`, `pose.alert` | counters and detail |
-| `gesture.name`, `gesture.hand`, `gesture.action` | the hand gesture being held (`open_palm`, `fist`, `thumbs_up`, `thumbs_down`, `peace`, `pointing`, `rock`, `ok`, `call_me` or empty), which hand, and what the demo did with the last one |
+| `gesture.name`, `gesture.hand`, `gesture.action` | the hand gesture being held (`fist`, `thumbs_up`, `thumbs_down`, `peace`, `pointing`, `rock`, `ok`, `call_me` or empty), which hand, and what the demo did with the last one |
 | `gesture.hands_seen`, `gesture.infer_ms`, `gesture.<name>` | hands with keypoints this sample, hand-model time per frame, and a count per gesture since start |
 | `events.*` | totals since start: `zone_breaches`, `falls`, `hands_up`, `reps`, `gestures`, `max_people`, `uptime_min` |
 | `config.*` | `backend`, `conf`, `zone`, `telemetry_s`, `camera`, `hands`, `gesture_actions` |
@@ -162,7 +178,8 @@ alert is confirmed.
 | `set_zone` | `x1,y1,x2,y2,x3,y3[,...]` (0–1 or percent) \| `default` \| `clear` | hazard polygon, persisted in `pose_zone.json` |
 | `set_conf` | 0.05–0.95 | person confidence threshold |
 | `set_interval` | seconds | telemetry interval |
-| `set_gesture_action` | `GESTURE ACTION`, action one of `alert` \| `toggle_backend` \| `reset_counters` \| `snapshot` \| `none` | what a hand gesture does; persisted |
+| `set_gesture_action` | `GESTURE ACTION`, action one of `clear_estop` \| `toggle_backend` \| `reset_counters` \| `snapshot` \| `none` | what a hand gesture does; persisted (one gesture always keeps `clear_estop`) |
+| `clear_estop` | | operator override: release a latched E-STOP from the dashboard |
 | `set_mirror` | `on` \| `off` \| `toggle` | mirror the picture (default on: a screen facing the viewer behaves like a mirror); persisted |
 | `reset_counters` | | zero the `events` and gesture totals |
 | `show_config` | | current configuration in the ack |
@@ -207,15 +224,15 @@ The gesture comes from finger states, not from a classifier. A finger is
 tip reaches past the knuckle, **curled** when the chain is clearly bent or
 the tip is folded back inside the knuckles; a half-bent finger, the normal
 state of a relaxed hand, is neither, and no gesture accepts it. The thumb is
-out when it stands clear of the palm. The stop, peace and rock signs must
-also be held **fingers up** (tips clearly above the wrist), which a hand
-hanging at someone's side never is. From that:
+out when it stands clear of the palm. The peace and rock signs must also be
+held **fingers up** (tips clearly above the wrist), which a hand hanging at
+someone's side never is. An open hand is deliberately **not** a gesture:
+it is what hands look like most of the time. From that:
 
 | Gesture | Fingers | Default action |
 |---|---|---|
-| `open_palm` | all four out | `alert` — the red "STOP (open palm)" banner and `pose.alert` while held; both hands up on the head (ALL CLEAR) cancels it |
 | `fist` | all curled | `snapshot` |
-| `thumbs_up` / `thumbs_down` | thumb only, above / below the wrist | `reset_counters` / — |
+| `thumbs_up` / `thumbs_down` | thumb only, above / below the wrist | `clear_estop` — held for a second, releases the E-STOP / — |
 | `peace` | index + middle | `toggle_backend` — the live DRP-AI-vs-CPU switch without a dashboard |
 | `pointing` | index only | — |
 | `rock` | index + pinky | — |
@@ -225,12 +242,15 @@ hanging at someone's side never is. From that:
 Every recognised gesture is sent at once (`gesture.name`, `gesture.hand`,
 `gesture.action`) and counted, so /IOTCONNECT rules can act on any of them
 (a `pointing` could switch a light in another demo). A gesture must hold
-for 3 frames to count and fires its action once; `set_gesture_action
+for 4 frames to count and fires its action once; `set_gesture_action
 GESTURE ACTION` remaps it, `none` turns the action off (the event still
-goes out). While a gesture is held, and for a moment after, a **large badge**
-in the middle of the picture names it (red for the STOP, amber otherwise)
-with the action underneath, so a visitor sees it from across the booth; the
-HDMI panel's third counter shows it too.
+goes out). The E-STOP release is the exception: the gesture mapped to
+`clear_estop` has to be **held for a second** while the E-STOP is latched,
+and the badge says so. While a gesture is held, and for a moment after, a
+**large badge** in the middle of the picture names it (green while it is
+releasing the E-STOP, amber otherwise) with the action underneath, so a
+visitor sees it from across the booth; the HDMI panel's third counter shows
+it too.
 
 Check the hand model on images or the live camera without the app:
 
@@ -360,8 +380,9 @@ itself needs about 17 ms.
 - **Alerts flicker**: raise the debounce counts in `pose_events.py`.
 - **A sitting or crouching person trips PERSON DOWN**: raise `angle_thr` in
   `person_down()`; it is 60° of torso lean.
-- **A gesture fires when nobody is gesturing** (open palm on a relaxed
-  hand was the classic): the bars are `STRAIGHT_EXT`, `STRAIGHT_CURL`,
+- **A gesture fires when nobody is gesturing** (an open hand reading as a
+  gesture was the classic, which is why open palm is no longer one): the
+  bars are `STRAIGHT_EXT`, `STRAIGHT_CURL`,
   `EXT_REACH` and `CURL_REACH` at the top of `hand_gestures.py`, the hold is
   `GestureTracker(hold=4)`,
   and `--hand-conf` (0.5) drops low-confidence hands. A better hand model

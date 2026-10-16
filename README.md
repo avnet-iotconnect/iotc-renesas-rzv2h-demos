@@ -53,6 +53,10 @@ that uses them.
    cd /root/iotc-renesas-rzv2h-demos
    bash setup_board.sh          # pip installs, numpy pinned (see constraints.txt)
    ```
+   It ends with a board check (OpenCV, /IOTCONNECT SDK, LiteRT, DRP-AI,
+   camera) and reports which demo's models are present. A missing xArm is
+   only a note, so a pose-only board passes too. The pose models are copied
+   separately; see [pose-safety §3.1](pose-safety/README.md#31-files-on-the-board).
 4. `cd robotic-arm` or `cd pose-safety` and follow that folder's README:
    models, /IOTCONNECT template and device, calibration, running, boot service.
 
